@@ -1,102 +1,112 @@
 # -----------------------------------------------------------------------------
-# check_mem_init.tcl - verify the on-chip memories actually carry their data
+# check_mem_init.tcl - V2 acceptance: NO memory may carry baked-in data
 # -----------------------------------------------------------------------------
-#   vivado -mode batch -nolog -nojournal -notrace -source build/moe/check_mem_init.tcl
+#   vivado -mode batch -nolog -nojournal -notrace -source scripts/check_mem_init.tcl
 #
-# Opens the routed checkpoint and inspects the INIT_* contents of the block RAMs.
-# A RAMB primitive exposes its power-on contents that way, so this answers the
-# question "did $readmemh actually make it into the silicon" for BOTH memories
-# that matter:
+# This check used to do the OPPOSITE.  Before V2 it verified that the weight and
+# activation BRAMs DID carry their contents, because $readmemh in an initial block
+# was how data got in - and the worry was that synthesis had silently dropped it.
 #
-#   u_wbank_r*  - the FP4 weight codes, from mem_init/expert0/gate_r*.mem
-#   act_rom     - the activation vector, from sim/data/input.mem
+# V2 removed every initial block on purpose: the memories must configure EMPTY and
+# be filled at runtime.  So the question is now inverted:
 #
-# The activation ROM is the new suspect: synthesis reports it was mapped into
-# block RAM this time ("Trying to map ROM act_rom into Block RAM"), whereas an
-# earlier build left it in registers.  If its INIT data is empty the engine
-# computes with zeros and every checksum is wrong.
+#   * if a RAMB primitive still has non-zero INIT_* contents, some $readmemh
+#     survived a refactor and the "loadable" claim would be a lie;
+#   * if the RAMB count dropped, the write port probably forced a memory into
+#     LUTs, which would be a much bigger change than it looks.
+#
+# A RAMB primitive exposes its power-on contents as INIT_00 .. INIT_7F, so both
+# questions are answered by reading the netlist.
+#
+# Exit code is non-zero when the design is not in the expected state, so this can
+# gate a build.
 # -----------------------------------------------------------------------------
 
 set ROOT {D:/ai/moe_fpga_proto_verilog}
-set OUT  $ROOT/build/moe/memcheck
-set DCP  $ROOT/build/moe/out/post_route.dcp
 
-file delete -force $OUT
-file mkdir $OUT
-
-foreach ch {stdout stderr} { catch { fconfigure $ch -buffering none } }
-
-if {![file exists $DCP]} {
-    puts "CHECK FAILED: no routed checkpoint at $DCP"
+# Prefer the routed checkpoint - it is what becomes the bitstream - and fall back
+# to the synthesis one when only synthesis has been run.
+set DCP ""
+foreach c [list \
+        $ROOT/build/moe/out/post_route.dcp \
+        $ROOT/build/moe/out/post_physopt.dcp \
+        $ROOT/build/moe/synth_out/post_synth.dcp] {
+    if {[file exists $c]} { set DCP $c; break }
+}
+if {$DCP eq ""} {
+    puts "==== FAILED: no checkpoint found; run scripts/run_build.ps1 first"
     exit 1
 }
 
-puts "==== opening $DCP"
+foreach ch {stdout stderr} { catch { fconfigure $ch -buffering none } }
+
+puts "==== checkpoint: $DCP"
 open_checkpoint $DCP
 
-puts ""
-puts "==== block RAM inventory"
-set cells [get_cells -hier -quiet -filter {REF_NAME =~ RAMB*}]
-puts "==== RAMB cells = [llength $cells]"
-foreach c $cells {
-    set ref "?"
-    catch { set ref [get_property REF_NAME $c] }
-    puts "====   $c  ($ref)"
+set cells [get_cells -quiet -hier -filter {REF_NAME =~ RAMB*}]
+set ncells [llength $cells]
+puts "==== RAMB primitives: $ncells"
+if {$ncells == 0} {
+    puts "==== FAILED: no RAMB primitives at all - the memories were not inferred as block RAM"
+    close_design
+    exit 1
 }
 
-puts ""
-puts "==== INIT data per cell (is the memory really loaded?)"
-set all_nonzero 1
+set total_nonzero 0
+set nonzero_cells 0
+set named 0
+
 foreach c $cells {
-    set props {}
-    catch { set props [list_property $c] }
-    set nz 0
-    set total 0
-    foreach p $props {
-        if {![string match "INIT_*" $p]} { continue }
-        incr total
+    set nz  0
+    set tot 0
+    foreach p [list_property $c] {
+        # Only the data words, INIT_00..INIT_7F and INITP_00..INITP_0F.  A prefix
+        # match on "INIT*" also catches INIT_FILE, whose default value is the
+        # string 'NONE', which made every RAMB look as if it carried data.
+        if {![regexp {^INITP?_[0-9A-Fa-f]+$} $p]} { continue }
+        incr tot
         set v ""
         catch { set v [get_property $p $c] }
-        if {$v ne "" && [string trim $v 0] ne ""} { incr nz }
+        # The property value is a Verilog literal, e.g.
+        #     256'h0000000000000000000000000000000000000000000000000000000000000000
+        # A naive [string trim $v 0] only strips leading/trailing zeros and leaves
+        # the "256'h" prefix behind, so an all-zero memory was reported as
+        # non-zero.  Strip the width/base prefix first, then test the digits.
+        set digits $v
+        if {[regexp {^[0-9]*'[sS]?[hbodHBOD]([0-9a-fA-F_]+)$} $v -> digits]} {
+            set digits [string map {_ ""} $digits]
+        }
+        if {[string trim $digits 0] ne ""} { incr nz }
     }
-    puts "====   $c : $nz / $total INIT_* props non-zero"
-    if {$nz == 0} { set all_nonzero 0 }
-}
-
-puts ""
-if {$all_nonzero} {
-    puts "==== VERDICT: every RAMB carries non-zero init data"
-} else {
-    puts "==== VERDICT: at least one RAMB is EMPTY - its \$readmemh did not take effect"
-}
-
-# Focus on the activation ROM specifically, since that is the new suspect.
-puts ""
-puts "==== activation ROM detail"
-set arom [get_cells -hier -quiet -filter {NAME =~ *act_rom*}]
-puts "==== act_rom cells = [llength $arom]"
-foreach c $arom {
-    set ref "?"
-    catch { set ref [get_property REF_NAME $c] }
-    set props {}
-    catch { set props [list_property $c] }
-    set nz 0
-    set sample ""
-    foreach p $props {
-        if {![string match "INIT_*" $p]} { continue }
-        set v ""
-        catch { set v [get_property $p $c] }
-        if {$v ne "" && [string trim $v 0] ne ""} {
-            incr nz
-            if {$sample eq ""} { set sample "$p=[string range $v 0 31]..." }
+    if {$nz > 0} {
+        incr nonzero_cells
+        incr total_nonzero $nz
+        if {$named < 8} {
+            puts "====   NON-ZERO: $c  ($nz / $tot)"
+            incr named
         }
     }
-    puts "====   $c ($ref) non-zero INIT props = $nz   $sample"
-    if {$nz == 0} {
-        puts "====   *** this one is EMPTY ***"
-    }
+}
+
+puts ""
+if {$nonzero_cells == 0} {
+    puts "==== RESULT: all $ncells RAMB primitives configure EMPTY"
+    puts "====         -> nothing is baked into the bitstream, V2 goal met"
+    set rc 0
+} else {
+    puts "==== RESULT: $nonzero_cells of $ncells RAMB primitives still carry data"
+    puts "====         ($total_nonzero non-zero INIT_* properties)"
+    puts "====         -> some readmemh survived; the memories are NOT loadable-only"
+    set rc 1
+}
+
+# 32 weight primitives (4 banks x 8) plus 4 activation buffers = 36 tiles, though
+# primitives rather than tiles are counted here, so allow a little slack.
+if {$ncells -lt 36} {
+    puts "==== WARNING: only $ncells RAMB primitives, at least 36 were expected"
+    puts "====          check whether a memory was inferred as distributed RAM"
 }
 
 close_design
-puts ""
-puts "==== CHECK DONE"
+puts "==== DONE (exit $rc)"
+exit $rc

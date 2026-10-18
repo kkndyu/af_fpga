@@ -13,16 +13,12 @@
 //   - One output block only.  This directly covers gate/up output width E=256.
 //   - Down stage can reuse this block repeatedly outside this module.
 //
-// The activation buffer can be loaded through act_wr_* ports before start.
-// Region weight banks are initialized from four .mem files.
+// V2: both the activations and the weights are loaded at runtime.  Nothing is
+// read from a .mem file at synthesis time any more - see wbank_region.v for why.
 // -----------------------------------------------------------------------------
 module gemv_engine #(
     parameter K_LEN      = `H_DIM,
-    parameter K_ADDR_W   = `H_ADDR_W,
-    parameter INIT_R0    = "mem_init/expert0/gate_r0.mem",
-    parameter INIT_R1    = "mem_init/expert0/gate_r1.mem",
-    parameter INIT_R2    = "mem_init/expert0/gate_r2.mem",
-    parameter INIT_R3    = "mem_init/expert0/gate_r3.mem"
+    parameter K_ADDR_W   = `H_ADDR_W
 )(
     input                         clk,
     input                         rst_n,
@@ -31,7 +27,22 @@ module gemv_engine #(
     output reg                    busy,
     output reg                    done,
 
-    // Activation load port.
+    // Weight load port (V2).
+    //
+    // One whole 256-bit row per cycle.  w_wr_region picks which of the four banks
+    // receives it: the banks hold four different column slices of the weight
+    // matrix, so they need different data and cannot share one write strobe.
+    //
+    // A 256-bit port at the board level would be 256 pins, which the board does
+    // not have, so this port is driven internally (by the loader) and never
+    // becomes a top-level pin.
+    input                         w_wr_en,
+    input      [1:0]              w_wr_region,
+    input      [K_ADDR_W-1:0]     w_wr_addr,
+    input      [`REGION_WCODE_W-1:0] w_wr_data,
+
+    // Activation load port.  Broadcast to all four regions: every region needs
+    // the same activation vector, so one write reaches four buffers.
     input                         act_wr_en,
     input      [K_ADDR_W-1:0]     act_wr_addr,
     input      [`ACT_W-1:0]       act_wr_data,
@@ -146,10 +157,12 @@ module gemv_engine #(
     wbank_region #(
         .DEPTH(K_LEN),
         .ADDR_W(K_ADDR_W),
-        .DATA_W(`REGION_WCODE_W),
-        .INIT_FILE(INIT_R0)
+        .DATA_W(`REGION_WCODE_W)
     ) u_wbank_r0 (
         .clk(clk),
+        .wr_en(w_wr_en && (w_wr_region == 2'd0)),
+        .wr_addr(w_wr_addr),
+        .wr_data(w_wr_data),
         .rd_en(rd_en),
         .rd_addr(k_idx),
         .rd_data(wcode_r0)
@@ -158,10 +171,12 @@ module gemv_engine #(
     wbank_region #(
         .DEPTH(K_LEN),
         .ADDR_W(K_ADDR_W),
-        .DATA_W(`REGION_WCODE_W),
-        .INIT_FILE(INIT_R1)
+        .DATA_W(`REGION_WCODE_W)
     ) u_wbank_r1 (
         .clk(clk),
+        .wr_en(w_wr_en && (w_wr_region == 2'd1)),
+        .wr_addr(w_wr_addr),
+        .wr_data(w_wr_data),
         .rd_en(rd_en),
         .rd_addr(k_idx),
         .rd_data(wcode_r1)
@@ -170,10 +185,12 @@ module gemv_engine #(
     wbank_region #(
         .DEPTH(K_LEN),
         .ADDR_W(K_ADDR_W),
-        .DATA_W(`REGION_WCODE_W),
-        .INIT_FILE(INIT_R2)
+        .DATA_W(`REGION_WCODE_W)
     ) u_wbank_r2 (
         .clk(clk),
+        .wr_en(w_wr_en && (w_wr_region == 2'd2)),
+        .wr_addr(w_wr_addr),
+        .wr_data(w_wr_data),
         .rd_en(rd_en),
         .rd_addr(k_idx),
         .rd_data(wcode_r2)
@@ -182,10 +199,12 @@ module gemv_engine #(
     wbank_region #(
         .DEPTH(K_LEN),
         .ADDR_W(K_ADDR_W),
-        .DATA_W(`REGION_WCODE_W),
-        .INIT_FILE(INIT_R3)
+        .DATA_W(`REGION_WCODE_W)
     ) u_wbank_r3 (
         .clk(clk),
+        .wr_en(w_wr_en && (w_wr_region == 2'd3)),
+        .wr_addr(w_wr_addr),
+        .wr_data(w_wr_data),
         .rd_en(rd_en),
         .rd_addr(k_idx),
         .rd_data(wcode_r3)

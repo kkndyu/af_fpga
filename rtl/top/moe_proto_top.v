@@ -14,12 +14,19 @@
 //
 //   start        pulse to launch one GEMV
 //   busy / done  engine status
+//   w_wr_*       weight load port (V2): one 256-bit row per cycle, region select
+//   act_wr_*     activation load port, broadcast to all four regions
 //   rd_start     pulse to begin streaming the result out
+//   rd_start_lane  first lane to stream (V2); lets a host read a sub-range
 //   rd_pause     hold the stream; lets a slow consumer throttle it with no FIFO
 //   rd_valid     high while a result byte is on rd_data
 //   rd_lane      0..255, which accumulator lane the byte belongs to
 //   rd_byte      0..3, byte position within the 32-bit lane value
 //   rd_data      the byte itself
+//
+// V2 note: none of the memories are initialised at configuration time any more.
+// A fresh bitstream computes garbage until the weight and activation ports have
+// been written.  That is intentional - it is what makes the device reusable.
 // -----------------------------------------------------------------------------
 module moe_proto_top (
     input                       clk,
@@ -28,12 +35,19 @@ module moe_proto_top (
     output                      busy,
     output                      done,
 
+    // Weight load port.
+    input                       w_wr_en,
+    input      [1:0]            w_wr_region,
+    input      [`H_ADDR_W-1:0]  w_wr_addr,
+    input      [`REGION_WCODE_W-1:0] w_wr_data,
+
     input                       act_wr_en,
     input      [`H_ADDR_W-1:0]  act_wr_addr,
     input      [`ACT_W-1:0]     act_wr_data,
 
     // Result readout, one byte at a time.
     input                       rd_start,
+    input      [`E_ADDR_W-1:0]  rd_start_lane,
     input                       rd_pause,     // slow consumer throttle
     output                      rd_valid,
     output     [`E_ADDR_W-1:0]  rd_lane,
@@ -55,6 +69,10 @@ module moe_proto_top (
         .start          (start),
         .busy           (busy),
         .done           (done),
+        .w_wr_en        (w_wr_en),
+        .w_wr_region    (w_wr_region),
+        .w_wr_addr      (w_wr_addr),
+        .w_wr_data      (w_wr_data),
         .act_wr_en      (act_wr_en),
         .act_wr_addr    (act_wr_addr),
         .act_wr_data    (act_wr_data),
@@ -63,19 +81,23 @@ module moe_proto_top (
 
     // The accumulators hold their value between GEMVs, so the readout indexes
     // acc_flat directly - there is no snapshot buffer to trigger.  As long as a
-    // new GEMV is not started while a readout is in progress (this board runs
-    // exactly one per reset) the data is stable.
+    // new GEMV is not started while a readout is in progress the data is stable.
+    //
+    // Caveat for V2: the host CAN now start a new GEMV and overwrite the
+    // accumulators under a running readout.  The loader must not allow RUN while
+    // a readout is active; rd_busy is the signal it has to respect.
     result_readout u_result_readout (
-        .clk       (clk),
-        .rst_n     (rst_n),
-        .acc_flat  (acc_flat),
-        .rd_start  (rd_start),
-        .rd_pause  (rd_pause),
-        .rd_valid  (rd_valid),
-        .rd_lane   (rd_lane),
-        .rd_byte   (rd_byte),
-        .rd_data   (rd_data),
-        .rd_busy   (rd_busy)
+        .clk            (clk),
+        .rst_n          (rst_n),
+        .acc_flat       (acc_flat),
+        .rd_start       (rd_start),
+        .rd_start_lane  (rd_start_lane),
+        .rd_pause       (rd_pause),
+        .rd_valid       (rd_valid),
+        .rd_lane        (rd_lane),
+        .rd_byte        (rd_byte),
+        .rd_data        (rd_data),
+        .rd_busy        (rd_busy)
     );
 
     // ------------------------------------------------------------------

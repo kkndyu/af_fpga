@@ -71,6 +71,12 @@ module result_readout (
 
     // Narrow readout interface.
     input                          rd_start,     // pulse to begin streaming
+    // V2: which lane to start from.  Before this, every readout began at lane 0
+    // and streamed to the end, so a host could not ask for "lanes 64..127" - the
+    // only way to reach a later range was to read everything from the start and
+    // discard.  With a per-inference protocol that is a real limitation, and the
+    // fix is one assignment below.
+    input      [`E_ADDR_W-1:0]     rd_start_lane,
     input                          rd_pause,     // hold the stream (slow consumer)
     output reg                     rd_valid,
     output reg [`E_ADDR_W-1:0]     rd_lane,      // 0 .. OUT_LANES-1
@@ -165,7 +171,7 @@ module result_readout (
             if (!active) begin
                 if (rd_start) begin
                     active   <= 1'b1;
-                    lane_idx <= {`E_ADDR_W{1'b0}};
+                    lane_idx <= rd_start_lane;
                     ph       <= 3'd0;
                 end
             end else if (!rd_pause) begin

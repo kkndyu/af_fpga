@@ -8,6 +8,45 @@ one-tap-per-cycle pipeline exactly as they are.  The only thing that changes is
 **where the data comes from**: runtime writes instead of `$readmemh` baked into
 the BRAM initial contents.
 
+## Status
+
+| Step | State |
+|---|---|
+| 1. `wbank_region`: write port, drop `$readmemh` | **done** |
+| 2. `gemv_engine` / `expert_engine` / `moe_proto_top`: pass the port through | **done** |
+| 3. `result_readout`: addressable start lane | **done** |
+| 4. testbench loads everything through the ports | **done** |
+| 5. `uart_rx` + `moe_loader` + board loader | **not started** |
+
+Verified so far, in simulation and in synthesis:
+
+- `scripts/sim.cmd readout`: the memories come up **empty** (all 256 lanes read
+  zero before loading), then the weights and activations are pushed in through
+  `w_wr_*` / `act_wr_*`, one GEMV runs, and all **256 lanes match
+  `sim/data/ref_out.hex`** exactly.  Checksum `ffffc6e2`.
+- `scripts/sim.cmd board`: the board top parks in `S_WAIT` and shows `LED_WAIT`.
+- `scripts/check_mem_infer.tcl`: synthesising `moe_proto_top` alone gives
+  28 RAMB36E1 + 8 RAMB18E1 (1,179,648 bits for 1,114,112 needed), and **every
+  RAMB configures empty** - nothing baked in.
+
+### Two findings from doing it
+
+**A block RAM with no write port activity is a constant, and gets folded away.**
+`moe_proto_board` currently ties `w_wr_*` and `act_wr_*` to zero because the
+loader does not exist yet, so synthesis proves the memories never change, constant
+propagates their contents, and deletes the engine.  The board build therefore
+collapses to a few hundred cells that only blink `LED_WAIT`.  That is the correct
+behaviour for this intermediate state, but it means **the board netlist cannot be
+used to check memory inference** - hence `check_mem_infer.tcl`, which synthesises
+`moe_proto_top` instead, where the write ports are real inputs.
+
+**`INIT_FILE` is not an initialisation data property.**  A RAMB primitive carries
+`INIT_00..INIT_7F`, `INITP_00..INITP_0F` and also `INIT_FILE`, whose default
+value is the string `NONE`.  A prefix match on `INIT*` therefore reports every
+single memory as carrying data.  Both check scripts now match
+`^INITP?_[0-9A-Fa-f]+$` instead.  This cost two rounds of chasing a phantom.
+
+
 Priority: this comes before replacing the integer codebook with real FP4 E2M1,
 because until data can be loaded at runtime there is nothing to evaluate - every
 new test vector would cost a 35-minute rebuild.

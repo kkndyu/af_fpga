@@ -113,42 +113,62 @@ module moe_proto_board (
     );
 
     // ------------------------------------------------------------------
-    // Startup sequencer: load activations from ROM, then start one GEMV
+    // Startup sequencer
     // ------------------------------------------------------------------
-    localparam LOAD_LAST = `H_DIM - 1;
+    // V2 intermediate state.
+    //
+    // The weight and activation BRAMs no longer have any initial contents - that
+    // is the whole point of V2 - so this board cannot compute anything until
+    // something loads them.  That loader is V2 step 4 (uart_rx + moe_loader) and
+    // is not written yet, so `load_done` is tied low and the sequencer parks in
+    // S_WAIT forever.
+    //
+    // This is deliberate, not a bug.  The LEDs show a distinct "waiting for data"
+    // pattern (LED_WAIT) precisely so that an unloaded board is never mistaken for
+    // a compute failure.  Connecting load_done to the loader, and driving the
+    // w_wr_* / act_wr_* ports from it, is the only change needed to bring the
+    // board back to life.
+    wire load_done = 1'b0;
 
-    // One-shot sequencer.
+    localparam S_WAIT  = 2'd0;
+    localparam S_START = 2'd1;
+    localparam S_RUN   = 2'd2;
+    localparam S_FIN   = 2'd3;
+
+    reg [1:0]                st;
+    reg                      start;
+    reg                      rd_start;
+    reg [3:0]                led_r;
+
+    // Load ports.  Tied off until V2 step 4 drives them from the loader.
+    wire                       w_wr_en     = 1'b0;
+    wire [1:0]                 w_wr_region = 2'd0;
+    wire [`H_ADDR_W-1:0]       w_wr_addr   = {`H_ADDR_W{1'b0}};
+    wire [`REGION_WCODE_W-1:0] w_wr_data   = {`REGION_WCODE_W{1'b0}};
+
+    wire                       act_wr_en   = 1'b0;
+    wire [`H_ADDR_W-1:0]       act_wr_addr = {`H_ADDR_W{1'b0}};
+    wire [`ACT_W-1:0]          act_wr_data = {`ACT_W{1'b0}};
+
+    wire [`E_ADDR_W-1:0]       rd_start_lane = {`E_ADDR_W{1'b0}};
+
+    wire busy;
+    wire done;
+
+    // Why S_FIN latches rather than re-arming:
     //
     // The previous version stayed in a wait state and re-armed 'start' whenever
     // it saw !done && !done_d && !busy.  After the first GEMV finished, done
-    // pulsed for one cycle and then dropped, so that condition became true
-    // again and the engine restarted forever.  Every restart re-captured the
-    // result and re-ran the readout, and because result_checksum is never
-    // cleared it accumulated run after run - the board would have shown a
-    // steadily changing value that could never equal the expected one.
+    // pulsed for one cycle and then dropped, so that condition became true again
+    // and the engine restarted forever.  Every restart re-captured the result and
+    // re-ran the readout, and because result_checksum is never cleared it
+    // accumulated run after run - the board would have shown a steadily changing
+    // value that could never equal the expected one.
     //
     // Board-level simulation caught this before any bitstream was programmed:
     // the checksum read fff8a322 instead of ffffc6e2 and busy was still high.
     //
     // S_FIN latches, so the GEMV runs exactly once per reset.
-    localparam S_LOAD  = 2'd0;
-    localparam S_START = 2'd1;
-    localparam S_RUN   = 2'd2;
-    localparam S_FIN   = 2'd3;
-
-    (* rom_style = "block" *) reg [`ACT_W-1:0] act_rom [0:`H_DIM-1];
-
-    reg [1:0]                st;
-    reg [`H_ADDR_W-1:0]      ld_idx;
-    reg                      act_wr_en;
-    reg [`H_ADDR_W-1:0]      act_wr_addr;
-    reg [`ACT_W-1:0]         act_wr_data;
-    reg                      start;
-    reg                      rd_start;
-    reg [3:0]                led_r;
-
-    wire busy;
-    wire done;
 
     // Narrow readout window onto the captured GEMV result.
     wire                     rd_valid;
@@ -167,52 +187,35 @@ module moe_proto_board (
 
     integer i;
 
-    initial begin
-        for (i = 0; i < `H_DIM; i = i + 1) begin
-            act_rom[i] = {`ACT_W{1'b0}};
-        end
-        $readmemh("sim/data/input.mem", act_rom);
-    end
-
-    // Sequencer.  Loads the activations, launches exactly one GEMV, starts the
-    // readout when it completes, then latches in S_FIN forever.
+    // Sequencer.  Waits for the memories to be loaded, launches exactly one GEMV,
+    // starts the readout when it completes, then latches in S_FIN forever.
     always @(posedge sys_clk or negedge rst_n) begin
         if (!rst_n) begin
-            st           <= S_LOAD;
-            ld_idx       <= {`H_ADDR_W{1'b0}};
-            act_wr_en    <= 1'b0;
-            act_wr_addr  <= {`H_ADDR_W{1'b0}};
-            act_wr_data  <= {`ACT_W{1'b0}};
-            start        <= 1'b0;
-            rd_start     <= 1'b0;
+            st       <= S_WAIT;
+            start    <= 1'b0;
+            rd_start <= 1'b0;
         end else begin
             // Both are one-cycle pulses.
             start    <= 1'b0;
             rd_start <= 1'b0;
 
             case (st)
-                S_LOAD: begin
-                    act_wr_en   <= 1'b1;
-                    act_wr_addr <= ld_idx;
-                    act_wr_data <= act_rom[ld_idx];
-
-                    if (ld_idx == LOAD_LAST) begin
-                        st <= S_START;
-                    end else begin
-                        ld_idx <= ld_idx + {{(`H_ADDR_W-1){1'b0}}, 1'b1};
-                    end
+                // Park here until the loader reports the memories are filled.
+                // load_done is tied low in this V2 intermediate state, so the
+                // board sits here and shows LED_WAIT - see the note above.
+                S_WAIT: begin
+                    if (load_done) st <= S_START;
                 end
 
-                // One idle cycle after the last write, then launch.
+                // Launch.  By now the loader has written both memories.
                 S_START: begin
-                    act_wr_en <= 1'b0;
-                    start     <= 1'b1;
-                    st        <= S_RUN;
+                    start <= 1'b1;
+                    st    <= S_RUN;
                 end
 
                 // Wait for the engine to report completion.  done is a single
-                // cycle; on it, result_readout snapshots the accumulators
-                // (capture is wired to done) and the readout is kicked off.
+                // cycle; on it the readout is kicked off.  The accumulators hold
+                // their value, so there is no snapshot buffer to trigger.
                 S_RUN: begin
                     if (done) begin
                         rd_start <= 1'b1;
@@ -220,14 +223,14 @@ module moe_proto_board (
                     end
                 end
 
-                // Latch.  Returning to S_LOAD here would restart the whole
+                // Latch.  Returning to S_WAIT here would restart the whole
                 // GEMV and make the checksum meaningless.
                 S_FIN: begin
                     st <= S_FIN;
                 end
 
                 default: begin
-                    st <= S_LOAD;
+                    st <= S_WAIT;
                 end
             endcase
         end
@@ -300,12 +303,25 @@ module moe_proto_board (
     wire checksum_ok = (result_checksum == GOLDEN_CHECKSUM);
 
     // Active low: a 0 lights the LED.
+    //
+    //   LED1+LED2 blink  -> PASS, checksum equals the golden value
+    //   LED3+LED4 blink  -> FAIL, checksum differs
+    //   LED1+LED3 blink  -> NOT LOADED: no loader is present in this build, so
+    //                       the memories were never filled and no GEMV ever ran
+    //
+    // The third pattern exists so that an unloaded board cannot be read as a
+    // compute failure.  It is diagonal, so it is distinguishable from both
+    // verdicts even if one LED is dead.
     localparam [3:0] LED_ALL_OFF = 4'b1111;
     localparam [3:0] LED_PASS    = 4'b1100;   // LED1 + LED2 lit
     localparam [3:0] LED_FAIL    = 4'b0011;   // LED3 + LED4 lit
+    localparam [3:0] LED_WAIT    = 4'b1010;   // LED1 + LED3 lit
 
     always @* begin
-        if (!result_valid) begin
+        if (!load_done) begin
+            // V2 intermediate state: nothing has loaded the memories.
+            led_r = blink_phase ? LED_ALL_OFF : LED_WAIT;
+        end else if (!result_valid) begin
             led_r = LED_ALL_OFF;                      // running
         end else if (blink_phase) begin
             led_r = LED_ALL_OFF;                      // blink off-phase
@@ -327,10 +343,15 @@ module moe_proto_board (
         .start        (start),
         .busy         (busy),
         .done         (done),
+        .w_wr_en      (w_wr_en),
+        .w_wr_region  (w_wr_region),
+        .w_wr_addr    (w_wr_addr),
+        .w_wr_data    (w_wr_data),
         .act_wr_en    (act_wr_en),
         .act_wr_addr  (act_wr_addr),
         .act_wr_data  (act_wr_data),
         .rd_start     (rd_start),
+        .rd_start_lane(rd_start_lane),
         .rd_pause     (rd_pause),
         .rd_valid     (rd_valid),
         .rd_lane      (rd_lane),
