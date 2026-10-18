@@ -1,0 +1,60 @@
+# -----------------------------------------------------------------------------
+# .gitignore - MoE FPGA prototype
+# -----------------------------------------------------------------------------
+# Principle: commit only what cannot be regenerated on this machine.
+#
+# The repository is deliberately small (~640 KB without build output).  Anything
+# that a script can rebuild is excluded, because a checked-in artefact goes stale
+# silently and then lies about what the source does.
+#
+# Note on the weight/activation .mem files: they ARE committed, even though
+# scripts/gen_mem.py generates them, because Python is broken in this environment
+# (exits with 0xC0000409).  A fresh checkout has to work here, so the generated
+# data ships with it.
+# -----------------------------------------------------------------------------
+
+# ---- build output: everything under build/ is regenerable ------------------
+# See build/README.md for how to recreate each item.
+/build/*
+!/build/README.md
+
+# ---- Vivado project and checkpoint artefacts -------------------------------
+*.dcp
+*.bit
+*.ltx
+*.str
+*.Xil
+.Xil/
+*.jou
+*.pb
+vivado.log
+vivado_pid*.str
+*.backup.jou
+*.backup.log
+usage_statistics_webtalk.*
+tight_setup_hold_pins.txt
+
+# ---- simulator droppings --------------------------------------------------
+# scripts/sim.cmd sweeps these into build/logs/<mode>/ after every run; these
+# rules are the belt to that braces, for runs started by hand or by Vivado.
+/xsim.dir/
+/*.wdb
+/*.log
+/xsim*
+/xvlog*
+/xelab*
+/webtalk*
+/.Xil/
+
+# ---- simulation outputs (inputs are kept, outputs are not) ----------------
+# sim/data/input.mem and sim/data/ref_out.hex are stimulus and golden reference:
+# committed.  These two are produced by the testbenches:
+/sim/data/readout_out.hex
+/sim/data/rtl_out.hex
+
+# ---- OS and editor noise --------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*~
