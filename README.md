@@ -194,9 +194,12 @@ Recorded so they are not mistaken for finished work:
 - **Not real FP4.** The codebook is integer shift multiples with no exponent
   alignment, and the per-lane scaling stage from the reference architecture is not
   implemented.
-- **UART receive is broken.** `uart_rx.v` yields `4B 69` when sent `5A A5`, so the
-  JTAG-AXI path is the only working transport.  Documented in
-  `docs/v2_progress.md`.
+- **UART is unverified on hardware.** Both directions work in simulation
+  (`scripts\sim.cmd uart`, which also drives a STATUS command through the loader),
+  but nothing has been tried against a real USB-serial adapter - the baud rate
+  above 115200 is untested, and the pins P20/N15 come from the vendor's demo
+  rather than from a scope.  JTAG-AXI is the transport that has been proven on
+  silicon.
 - **One expert only.** 131 KB of weight storage fits one gate matrix.  See
   `docs/resource_assessment.md` for the projection to a full expert.
 - **`route_design` is erratic.** 499-2355 s with occasional non-convergence, not

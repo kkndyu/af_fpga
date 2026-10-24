@@ -31,7 +31,15 @@ module uart_tx #(
 
     reg        st;
     reg [15:0] cnt;
-    reg [2:0]  bit_idx;
+    // FOUR bits, not three.  The shift phase uses bit_idx 0..7 for the eight data
+    // bits and then steps to 8 to select the stop bit, so the counter must be able
+    // to HOLD 8.  At three bits the increment from 7 wrapped to 0, `bit_idx <= 7`
+    // stayed true forever, the stop-bit branch was unreachable, and the module
+    // re-transmitted the same byte in an endless loop.  On the wire that looked
+    // like a stop bit arriving one bit late followed by the data pattern
+    // repeating; a receiver syncing anywhere in that stream decodes fixed garbage
+    // (5A came back as 4B).  Same failure class as `rx_rp <= rx_rp + 2'd4`.
+    reg [3:0]  bit_idx;
     reg [7:0]  shreg;
 
     // Accept a byte only when idle.  Asserted combinationally so the producer

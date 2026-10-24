@@ -34,8 +34,7 @@ slow, and why, is in `docs/postmortem_readback_routing.md`.
 
 | Item | State |
 |---|---|
-| `rtl/periph/uart_rx.v` | transmits fine, receives wrongly: sending 5A A5 00 FF yields 4B 69 4B 69... and never stops producing bytes. Deprioritised once JTAG-AXI worked |
-| `rtl/periph/uart_tx.v` | appears correct in loopback (3 of 4 bytes arrived), but that test was itself flawed |
+| `rtl/periph/uart_tx.v` | **fixed** - `bit_idx` was `reg [2:0]` but the shift phase steps it to 8 to select the stop bit, so 7+1 wrapped to 0 and the stop-bit branch was unreachable: the transmitter re-sent the same byte forever. Loopback now passes for 5A A5 00 FF and a STATUS command returns its 8-byte reply. Unverified on hardware. |
 | Readout in a tight loop | a single READ_OUT of 256 lanes is verified, as is a multi-row weight readback; two full READ_OUT commands in a row have not been exercised |
 | Up / down GEMVs | only the gate GEMV is in the datapath; the rest of the expert sequence is not built |
 
@@ -118,5 +117,6 @@ defaults to `WITH_AXI 0`, which needs no debug hub and builds anywhere.
 3. **Burst loading**, if JTAG loading speed matters for day-to-day use: AXI4-Lite
    costs one transaction per 4 bytes, so 131 KB takes 108 s. PROTOCOL 0 plus
    `awlen`/`wlast` support in the bridge would cut that by roughly 100x.
-4. `uart_rx`, only if a pin-based fallback transport is still wanted. It is the
-   cheapest to build but the least useful now that JTAG works.
+4. `uart` on real hardware, if a pin-based fallback transport is still
+   wanted. Both directions now pass in simulation; nothing has been tried
+   against a USB-serial adapter.
