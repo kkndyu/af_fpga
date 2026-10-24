@@ -1,0 +1,37 @@
+# -----------------------------------------------------------------------------
+# .gitattributes - line endings and diff behaviour
+# -----------------------------------------------------------------------------
+# Without this, a Windows checkout stores CRLF in the repository and then every
+# file shows as modified the first time it is touched by a tool that writes LF.
+# Vivado's Tcl scripts and the Verilog sources are happier with LF; cmd.exe batch
+# files are NOT - a .cmd with LF-only endings can misparse under some shells, so
+# they are pinned to CRLF.
+# -----------------------------------------------------------------------------
+
+* text=auto
+
+# Sources and scripts consumed by Vivado / xsim: LF in the repository.
+*.v        text eol=lf
+*.vh       text eol=lf
+*.sv       text eol=lf
+*.svh      text eol=lf
+*.xdc      text eol=lf
+*.tcl      text eol=lf
+*.md       text eol=lf
+*.js       text eol=lf
+*.py       text eol=lf
+*.js       text eol=lf
+
+# Batch and PowerShell: CRLF, because they run under cmd.exe / powershell.
+*.cmd      text eol=crlf
+*.bat      text eol=crlf
+*.ps1      text eol=crlf
+
+# Memory images and vectors: treated as binary so git neither converts line
+# endings nor tries to diff 65 KB hex lines.  A stray conversion here would
+# corrupt $readmemh input in a way that is very hard to spot.
+*.mem      -text
+*.hex      -text
+
+# Reports are large but plain text; keep them diffable.
+*.rpt      text eol=lf
