@@ -36,6 +36,17 @@ module expert_engine (
     input      [`H_ADDR_W-1:0]  act_wr_addr,
     input      [`ACT_W-1:0]     act_wr_data,
 
+    // Weight readback, passed through to gemv_engine.  The row never leaves the
+    // engine: only start/region/address/count go down and bytes come back up.
+    input                       rb_start,
+    input      [1:0]            rb_region,
+    input      [`H_ADDR_W-1:0]  rb_addr,
+    input      [15:0]           rb_nrows,
+    input                       rb_byte_ready,
+    output     [7:0]            rb_byte_out,
+    output                      rb_byte_valid,
+    output                      rb_done,
+
     output     [`OUT_ACC_W-1:0] expert_out_flat
 );
 
@@ -55,6 +66,14 @@ module expert_engine (
         .act_wr_en(act_wr_en),
         .act_wr_addr(act_wr_addr),
         .act_wr_data(act_wr_data),
+        .rb_start(rb_start),
+        .rb_region(rb_region),
+        .rb_addr(rb_addr),
+        .rb_nrows(rb_nrows),
+        .rb_byte_ready(rb_byte_ready),
+        .rb_byte_out(rb_byte_out),
+        .rb_byte_valid(rb_byte_valid),
+        .rb_done(rb_done),
         .acc_flat(expert_out_flat)
     );
 

@@ -32,6 +32,16 @@
 // Cost: the four copies are kept in full (see dont_touch below) instead of
 // being merged, roughly +2k flip-flops, about 0.8 % of the device.
 // -----------------------------------------------------------------------------
+// keep_hierarchy stays ON.
+//
+// It was briefly removed as an experiment (route_design had become erratic, and a
+// structural placement constraint was the obvious suspect).  Measured result:
+// routing got 24 % SLOWER and setup timing went from +0.155 ns to -0.156 ns,
+// because the dont_touch registers below were then free to be scattered across
+// the die - exactly the failure this attribute was added to prevent.  So it is
+// load-bearing in both directions, and the routing-time variance has some other
+// cause.  See docs/postmortem_routability.md.
+// -----------------------------------------------------------------------------
 (* keep_hierarchy = "yes" *)
 module mac_region #(
     parameter REGION_LANES = `REGION_LANES,
@@ -125,7 +135,7 @@ module mac_region #(
     // lets the tool merge them; pinning makes that impossible.
     //
     // prod16_q feeds the 16:1 mux data inputs of this region's lanes.
-    // wcode_d  feeds the per-lane 通道权重寄存器 (see mac_lane.v).
+    // wcode_d  feeds the per-lane weight-code register (see mac_lane.v).
     (* dont_touch = "true" *) reg  [`PROD16_W-1:0] prod16_q;
 
     (* dont_touch = "true" *) reg  [`REGION_WCODE_W-1:0] wcode_d;

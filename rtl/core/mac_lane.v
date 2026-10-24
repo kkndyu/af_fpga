@@ -3,19 +3,19 @@
 // -----------------------------------------------------------------------------
 // mac_lane
 // -----------------------------------------------------------------------------
-// One output lane ("通道").
+// One output lane.
 //
 // It matches the reference sub-array diagram:
 //
-//   通道权重寄存器  ->  候选乘积选择模块  ->  (缩放计算模块)  ->  累加
-//   (wcode_q)          (fp4_select)          (not implemented)
+//   channel weight register -> candidate product select -> (scaling) -> accumulate
+//   (wcode_q)                 (fp4_select)                (not implemented)
 //
 // The weight register lives HERE, not in the region.
 //
 // The reference weight-distribution diagram is explicit about the chain:
 //
-//   WBank N -> 权重读出寄存器 523 -> 局部分发寄存器 524 (optional)
-//           -> 通道 0..63 权重寄存器 -> 候选乘积选择模块
+//   WBank N -> weight read register 523 -> local distribution register 524 (optional)
+//           -> channel 0..63 weight register -> candidate product select
 //
 // so the LAST register before the mux is per-lane (4 bits each, 64 per region),
 // not one 256-bit register in the middle of the region.  The bit count is the
@@ -23,10 +23,10 @@
 // it drives, so the mux select has essentially no routing to do.
 //
 // Mapping to the reference diagram:
-//   WBank N                = u_wbank_r{0..3} inside gemv_engine
-//   权重读出寄存器 523      = that wbank's rd_data output register (wcode_r*)
-//   局部分发寄存器 524      = wcode_d in mac_region
-//   通道权重寄存器          = wcode_q here
+//   WBank N                   = u_wbank_r{0..3} inside gemv_engine
+//   weight read register 523  = that wbank's rd_data output register (wcode_r*)
+//   local distribution 524    = wcode_d in mac_region
+//   channel weight register   = wcode_q here
 // -----------------------------------------------------------------------------
 module mac_lane #(
     parameter WCODE_W = `WCODE_W,
@@ -45,7 +45,7 @@ module mac_lane #(
     output reg signed [ACC_W-1:0] acc_out
 );
 
-    // 通道权重寄存器 - one per lane, placed beside its own mux.
+    // Channel weight register - one per lane, placed beside its own mux.
     (* dont_touch = "true" *) reg [WCODE_W-1:0] wcode_q;
 
     always @(posedge clk or negedge rst_n) begin
@@ -56,12 +56,12 @@ module mac_lane #(
     wire signed [PROD_W-1:0] selected_prod;
 
     // ------------------------------------------------------------------
-    // Selection register - the natural home of the 缩放计算模块
+    // Selection register - the natural home of the scaling stage
     // ------------------------------------------------------------------
-    // This sits exactly where the reference diagram puts 缩放计算模块 (the
-    // per-lane scaling stage): between 候选乘积选择模块 and the accumulator.
-    // That stage is not implemented yet - I do not know its arithmetic - but the
-    // pipeline register belongs there regardless.
+    // This sits exactly where the reference diagram puts the per-lane scaling
+    // stage: between candidate product select and the accumulator.  That stage is
+    // not implemented yet - its arithmetic is not known - but the pipeline
+    // register belongs there regardless.
     //
     // Measured why: with everything else fixed, the critical path at a 200 MHz
     // constraint was the whole select-plus-add in one cycle:

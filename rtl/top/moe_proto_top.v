@@ -45,6 +45,19 @@ module moe_proto_top (
     input      [`H_ADDR_W-1:0]  act_wr_addr,
     input      [`ACT_W-1:0]     act_wr_data,
 
+    // Weight readback.  Drives the weight banks' read port while the engine is
+    // idle; the caller is responsible for not starting one during a GEMV.
+    // Only narrow signals cross this boundary - the 256-bit row is selected and
+    // serialised inside gemv_engine, next to the banks.
+    input                       rb_start,
+    input      [1:0]            rb_region,
+    input      [`H_ADDR_W-1:0]  rb_addr,
+    input      [15:0]           rb_nrows,
+    input                       rb_byte_ready,
+    output     [7:0]            rb_byte_out,
+    output                      rb_byte_valid,
+    output                      rb_done,
+
     // Result readout, one byte at a time.
     input                       rd_start,
     input      [`E_ADDR_W-1:0]  rd_start_lane,
@@ -76,6 +89,14 @@ module moe_proto_top (
         .act_wr_en      (act_wr_en),
         .act_wr_addr    (act_wr_addr),
         .act_wr_data    (act_wr_data),
+        .rb_start       (rb_start),
+        .rb_region      (rb_region),
+        .rb_addr        (rb_addr),
+        .rb_nrows       (rb_nrows),
+        .rb_byte_ready  (rb_byte_ready),
+        .rb_byte_out    (rb_byte_out),
+        .rb_byte_valid  (rb_byte_valid),
+        .rb_done        (rb_done),
         .expert_out_flat(acc_flat)
     );
 

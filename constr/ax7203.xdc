@@ -63,9 +63,12 @@ set_property PACKAGE_PIN T6 [get_ports rst_n]
 set_property IOSTANDARD LVCMOS15 [get_ports rst_n]
 
 # -----------------------------------------------------------------------------
-# Status LEDs
+# Status LEDs, active LOW
 # -----------------------------------------------------------------------------
-# led[0] DONE, led[1] BUSY, led[2] heartbeat, led[3] power
+#   led[0] B13  weights loaded
+#   led[1] C13  activation vector loaded
+#   led[2] D14  blinking while a GEMV runs
+#   led[3] D15  blinking on a sticky protocol error
 set_property PACKAGE_PIN B13 [get_ports {led[0]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {led[0]}]
 
@@ -77,3 +80,25 @@ set_property IOSTANDARD LVCMOS33 [get_ports {led[2]}]
 
 set_property PACKAGE_PIN D15 [get_ports {led[3]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {led[3]}]
+
+# -----------------------------------------------------------------------------
+# USB-UART: the on-board bridge, no external adapter needed
+# -----------------------------------------------------------------------------
+# Pin numbers come from the ALINX uart_test demo's own constraint file, which
+# labels them "usb uart define":
+#
+#   uart_rx  P20  LVCMOS33   FPGA receives
+#   uart_tx  N15  LVCMOS33   FPGA transmits
+#
+# The bridge chip part number is not documented in anything machine-readable
+# here, so 115200 is the only rate that is known good.  Anything higher has to be
+# measured - see docs/board_pinout.md.
+#
+# These are asynchronous inputs with respect to sys_clk; the receiver in
+# rtl/periph/uart_rx.v double-registers the line before using it, so no separate
+# set_input_delay is meaningful without a datasheet figure for the bridge.
+set_property PACKAGE_PIN P20 [get_ports uart_rx]
+set_property IOSTANDARD LVCMOS33 [get_ports uart_rx]
+
+set_property PACKAGE_PIN N15 [get_ports uart_tx]
+set_property IOSTANDARD LVCMOS33 [get_ports uart_tx]

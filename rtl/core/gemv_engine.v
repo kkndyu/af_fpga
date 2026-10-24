@@ -47,6 +47,29 @@ module gemv_engine #(
     input      [K_ADDR_W-1:0]     act_wr_addr,
     input      [`ACT_W-1:0]       act_wr_data,
 
+    // Weight readback.
+    //
+    // The serialiser lives INSIDE this module, next to the banks, on purpose.
+    //
+    // The first version put weight_readback in moe_loader and brought the whole
+    // REGION_WCODE_W-bit row out through four module boundaries.  That turned
+    // each bank's read data into a second, far-away load (1024 nets dragged across
+    // the die) and forced the loader to sit in the middle of a four-way 256-bit
+    // star while it also had to stay near the AXI bridge and the UART.  Resource
+    // use was unchanged (-114 LUT, -141 FF) but route_design went from 499 s to
+    // over 40 minutes, because the placement of the whole engine was compromised.
+    //
+    // Keeping the row selection local costs the same handful of LUTs and leaves
+    // the external interface at 40 narrow bits instead of 256.
+    input                         rb_start,
+    input      [1:0]              rb_region,
+    input      [K_ADDR_W-1:0]     rb_addr,
+    input      [15:0]             rb_nrows,
+    input                         rb_byte_ready,
+    output     [7:0]              rb_byte_out,
+    output                        rb_byte_valid,
+    output                        rb_done,
+
     // Flattened accumulator output, lane j at [j*ACC_W +: ACC_W].
     output     [`OUT_ACC_W-1:0]   acc_flat
 );
@@ -154,16 +177,90 @@ module gemv_engine #(
     // distribution, both of which are already per-region: the diagram draws one
     // region, and there are four of everything.
 
+    // Readback takes over the shared bank read port.  When rb_bank_en is low this
+    // is the engine's own behaviour, unchanged.  The caller must not start a
+    // readback during a GEMV.
+    wire                   rb_bank_en;
+    wire [1:0]             rb_bank_region;
+    wire [K_ADDR_W-1:0]    rb_bank_addr;
+    wire [`REGION_WCODE_W-1:0] rb_row;      // LOCAL: never leaves this module
+
+    wire                   bank_rd_en   = rb_bank_en ? 1'b1 : rd_en;
+
+    assign rb_row = (rb_bank_region == 2'd0) ? wcode_r0 :
+                    (rb_bank_region == 2'd1) ? wcode_r1 :
+                    (rb_bank_region == 2'd2) ? wcode_r2 : wcode_r3;
+
+    weight_readback #(
+        .ROW_W (`REGION_WCODE_W),
+        .ADDR_W(K_ADDR_W)
+    ) u_readback (
+        .clk        (clk),
+        .rst_n      (rst_n),
+        .start      (rb_start),
+        .region     (rb_region),
+        .addr       (rb_addr),
+        .nrows      (rb_nrows),
+        .rb_en      (rb_bank_en),
+        .rb_region  (rb_bank_region),
+        .rb_addr    (rb_bank_addr),
+        .rb_data    (rb_row),
+        .byte_out   (rb_byte_out),
+        .byte_valid (rb_byte_valid),
+        .byte_ready (rb_byte_ready),
+        .busy       (),
+        .done       (rb_done)
+    );
+
+    // ------------------------------------------------------------------
+    // Weight write port, REGISTERED at the destination
+    // ------------------------------------------------------------------
+    // The 256-bit write bus runs from the loader, across the die, to the data
+    // pins of all four banks.  Unregistered it was the design's worst setup path
+    // once the readback problems were fixed:
+    //
+    //   +0.071 ns, u_loader/w_wr_data -> u_wbank_r2/mem
+    //
+    // while the next worst path anywhere had +3.934 ns.  One long bus was setting
+    // the timing of the whole design.
+    //
+    // Registering here costs about 270 flops (the device is 8 % used) and turns
+    // the bank's data pins into a short register-to-BRAM hop.  The write lands one
+    // cycle later, which nothing can notice: the loader commits one row per 32
+    // bytes over a link that costs about a millisecond per byte.
+    //
+    // All four fields are registered together so enable/region/address/data keep
+    // their exact relationship; the loader holds them stable for the single cycle
+    // that w_wr_en is high.
+    reg                       w_wr_en_q;
+    reg [1:0]                 w_wr_region_q;
+    reg [K_ADDR_W-1:0]        w_wr_addr_q;
+    reg [`REGION_WCODE_W-1:0] w_wr_data_q;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            w_wr_en_q     <= 1'b0;
+            w_wr_region_q <= 2'd0;
+            w_wr_addr_q   <= {K_ADDR_W{1'b0}};
+            w_wr_data_q   <= {`REGION_WCODE_W{1'b0}};
+        end else begin
+            w_wr_en_q     <= w_wr_en;
+            w_wr_region_q <= w_wr_region;
+            w_wr_addr_q   <= w_wr_addr;
+            w_wr_data_q   <= w_wr_data;
+        end
+    end
+
     wbank_region #(
         .DEPTH(K_LEN),
         .ADDR_W(K_ADDR_W),
         .DATA_W(`REGION_WCODE_W)
     ) u_wbank_r0 (
         .clk(clk),
-        .wr_en(w_wr_en && (w_wr_region == 2'd0)),
-        .wr_addr(w_wr_addr),
-        .wr_data(w_wr_data),
-        .rd_en(rd_en),
+        .wr_en(w_wr_en_q && (w_wr_region_q == 2'd0)),
+        .wr_addr(w_wr_addr_q),
+        .wr_data(w_wr_data_q),
+        .rd_en(bank_rd_en),
         .rd_addr(k_idx),
         .rd_data(wcode_r0)
     );
@@ -174,10 +271,10 @@ module gemv_engine #(
         .DATA_W(`REGION_WCODE_W)
     ) u_wbank_r1 (
         .clk(clk),
-        .wr_en(w_wr_en && (w_wr_region == 2'd1)),
-        .wr_addr(w_wr_addr),
-        .wr_data(w_wr_data),
-        .rd_en(rd_en),
+        .wr_en(w_wr_en_q && (w_wr_region_q == 2'd1)),
+        .wr_addr(w_wr_addr_q),
+        .wr_data(w_wr_data_q),
+        .rd_en(bank_rd_en),
         .rd_addr(k_idx),
         .rd_data(wcode_r1)
     );
@@ -188,10 +285,10 @@ module gemv_engine #(
         .DATA_W(`REGION_WCODE_W)
     ) u_wbank_r2 (
         .clk(clk),
-        .wr_en(w_wr_en && (w_wr_region == 2'd2)),
-        .wr_addr(w_wr_addr),
-        .wr_data(w_wr_data),
-        .rd_en(rd_en),
+        .wr_en(w_wr_en_q && (w_wr_region_q == 2'd2)),
+        .wr_addr(w_wr_addr_q),
+        .wr_data(w_wr_data_q),
+        .rd_en(bank_rd_en),
         .rd_addr(k_idx),
         .rd_data(wcode_r2)
     );
@@ -202,10 +299,10 @@ module gemv_engine #(
         .DATA_W(`REGION_WCODE_W)
     ) u_wbank_r3 (
         .clk(clk),
-        .wr_en(w_wr_en && (w_wr_region == 2'd3)),
-        .wr_addr(w_wr_addr),
-        .wr_data(w_wr_data),
-        .rd_en(rd_en),
+        .wr_en(w_wr_en_q && (w_wr_region_q == 2'd3)),
+        .wr_addr(w_wr_addr_q),
+        .wr_data(w_wr_data_q),
+        .rd_en(bank_rd_en),
         .rd_addr(k_idx),
         .rd_data(wcode_r3)
     );
@@ -334,10 +431,23 @@ module gemv_engine #(
                     state <= S_IDLE;
                 end
 
-                default: begin
-                    state <= S_IDLE;
-                end
+                default: state <= S_IDLE;
             endcase
+
+            // Readback drives the address by LOADING THE COUNTER, not by muxing
+            // the address.
+            //
+            // The mux version cost one LUT level directly in front of the BRAM
+            // address pins and immediately became the worst setup path in the
+            // design:
+            //
+            //   -0.063 ns, u_gate_gemv/c_reg[5] -> u_wbank_r1/mem/ADDRBWRADDR[10]
+            //
+            // With the counter loaded instead, k_idx stays a plain register output
+            // straight to the BRAM.  The engine is idle during readback, and
+            // S_IDLE/S_CLEAR both reload c from zero on the next GEMV, so the
+            // readback address cannot leak into a computation.
+            if (rb_bank_en) c <= {1'b0, rb_bank_addr};
         end
     end
 

@@ -1,0 +1,177 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="920" viewBox="0 0 1240 920" font-family="Consolas, Menlo, monospace">
+  <defs>
+    <marker id="ar" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#333"/>
+    </marker>
+    <marker id="arR" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#c0392b"/>
+    </marker>
+    <marker id="arG" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#1e8449"/>
+    </marker>
+  </defs>
+
+  <rect width="1240" height="920" fill="#fbfbfb"/>
+
+  <!-- =================== LEFT: BEFORE =================== -->
+  <rect x="20" y="20" width="600" height="800" rx="10" fill="#fff" stroke="#c0392b" stroke-width="2"/>
+  <text x="320" y="52" font-size="21" font-weight="bold" fill="#c0392b" text-anchor="middle">
+    BEFORE  &#8212;  serialiser inside moe_loader</text>
+  <text x="320" y="76" font-size="13" fill="#666" text-anchor="middle">
+    route_design 499 s &#8594; over 2 hours</text>
+
+  <!-- engine boundary -->
+  <rect x="40" y="95" width="560" height="300" rx="8" fill="#fdf6f6" stroke="#c0392b" stroke-dasharray="6 4"/>
+  <text x="52" y="115" font-size="12" fill="#c0392b">gemv_engine</text>
+
+  <!-- banks + regions -->
+  <g font-size="12">
+    <rect x="60"  y="130" width="96" height="44" fill="#c0392b" opacity="0.85"/>
+    <text x="108" y="157" fill="#fff" text-anchor="middle">wbank 0</text>
+    <rect x="60"  y="196" width="96" height="44" fill="#c0392b" opacity="0.85"/>
+    <text x="108" y="223" fill="#fff" text-anchor="middle">wbank 1</text>
+    <rect x="60"  y="262" width="96" height="44" fill="#c0392b" opacity="0.85"/>
+    <text x="108" y="289" fill="#fff" text-anchor="middle">wbank 2</text>
+    <rect x="60"  y="328" width="96" height="44" fill="#c0392b" opacity="0.85"/>
+    <text x="108" y="355" fill="#fff" text-anchor="middle">wbank 3</text>
+
+    <rect x="230" y="130" width="84" height="44" fill="#e8e8e8" stroke="#999"/>
+    <text x="272" y="157" text-anchor="middle">region 0</text>
+    <rect x="230" y="196" width="84" height="44" fill="#e8e8e8" stroke="#999"/>
+    <text x="272" y="223" text-anchor="middle">region 1</text>
+    <rect x="230" y="262" width="84" height="44" fill="#e8e8e8" stroke="#999"/>
+    <text x="272" y="289" text-anchor="middle">region 2</text>
+    <rect x="230" y="328" width="84" height="44" fill="#e8e8e8" stroke="#999"/>
+    <text x="272" y="355" text-anchor="middle">region 3</text>
+  </g>
+
+  <!-- local short arrows -->
+  <g stroke="#1e8449" stroke-width="2" marker-end="url(#arG)">
+    <line x1="156" y1="152" x2="228" y2="152"/>
+    <line x1="156" y1="218" x2="228" y2="218"/>
+    <line x1="156" y1="284" x2="228" y2="284"/>
+    <line x1="156" y1="350" x2="228" y2="350"/>
+  </g>
+  <text x="192" y="143" font-size="10" fill="#1e8449" text-anchor="middle">256b</text>
+  <text x="192" y="376" font-size="11" fill="#1e8449" text-anchor="middle">&#9312; local, short &#8212; this was fine</text>
+
+  <!-- the far-away branch -->
+  <g stroke="#c0392b" stroke-width="3" fill="none">
+    <path d="M108,374 L108,404 L470,404"/>
+    <path d="M108,310 L108,404"/>
+    <path d="M108,244 L108,404"/>
+    <path d="M108,178 L108,404"/>
+  </g>
+  <rect x="470" y="386" width="110" height="36" fill="#c0392b" opacity="0.85"/>
+  <text x="525" y="409" font-size="11" fill="#fff" text-anchor="middle">256b 4:1 mux</text>
+  <text x="300" y="398" font-size="11" fill="#c0392b">&#9313; second, far-away load on every bank output</text>
+
+  <!-- crossing boundaries -->
+  <g stroke="#c0392b" stroke-width="3" marker-end="url(#arR)">
+    <line x1="525" y1="422" x2="525" y2="452"/>
+  </g>
+  <text x="540" y="443" font-size="11" fill="#c0392b">256 bits</text>
+
+  <g font-size="12">
+    <rect x="420" y="455" width="210" height="30" fill="#fff" stroke="#c0392b"/>
+    <text x="525" y="475" text-anchor="middle">expert_engine</text>
+    <line x1="525" y1="485" x2="525" y2="505" stroke="#c0392b" stroke-width="3" marker-end="url(#arR)"/>
+    <rect x="420" y="508" width="210" height="30" fill="#fff" stroke="#c0392b"/>
+    <text x="525" y="528" text-anchor="middle">moe_proto_top</text>
+    <line x1="525" y1="538" x2="525" y2="558" stroke="#c0392b" stroke-width="3" marker-end="url(#arR)"/>
+    <rect x="420" y="561" width="210" height="30" fill="#fff" stroke="#c0392b"/>
+    <text x="525" y="581" text-anchor="middle">moe_proto_board</text>
+    <line x1="525" y1="591" x2="525" y2="611" stroke="#c0392b" stroke-width="3" marker-end="url(#arR)"/>
+  </g>
+
+  <!-- loader -->
+  <rect x="400" y="614" width="250" height="86" rx="6" fill="#fff" stroke="#c0392b" stroke-width="2"/>
+  <text x="525" y="636" font-size="13" text-anchor="middle" font-weight="bold">moe_loader</text>
+  <rect x="430" y="646" width="190" height="42" fill="#fdf0f0" stroke="#c0392b" stroke-dasharray="4 3"/>
+  <text x="525" y="671" font-size="12" text-anchor="middle">weight_readback</text>
+
+  <text x="320" y="740" font-size="13" fill="#c0392b" text-anchor="middle">1024 wide nets dragged across the die</text>
+  <text x="320" y="762" font-size="13" fill="#c0392b" text-anchor="middle">+ read address from far away on 32 BRAM ports</text>
+  <text x="320" y="790" font-size="13" fill="#333" text-anchor="middle">LUT &#8722;114,  FF &#8722;141  (smaller!)</text>
+  <text x="320" y="808" font-size="13" fill="#333" text-anchor="middle">but the whole design got harder to place</text>
+
+  <!-- =================== RIGHT: AFTER =================== -->
+  <rect x="640" y="20" width="580" height="800" rx="10" fill="#fff" stroke="#1e8449" stroke-width="2"/>
+  <text x="930" y="52" font-size="21" font-weight="bold" fill="#1e8449" text-anchor="middle">
+    AFTER  &#8212;  serialiser beside the banks</text>
+  <text x="930" y="76" font-size="13" fill="#666" text-anchor="middle">
+    the 256-bit row never leaves gemv_engine</text>
+
+  <rect x="660" y="95" width="540" height="360" rx="8" fill="#f4faf6" stroke="#1e8449" stroke-dasharray="6 4"/>
+  <text x="672" y="115" font-size="12" fill="#1e8449">gemv_engine</text>
+
+  <g font-size="12">
+    <rect x="680" y="130" width="96" height="44" fill="#1e8449" opacity="0.85"/>
+    <text x="728" y="157" fill="#fff" text-anchor="middle">wbank 0</text>
+    <rect x="680" y="196" width="96" height="44" fill="#1e8449" opacity="0.85"/>
+    <text x="728" y="223" fill="#fff" text-anchor="middle">wbank 1</text>
+    <rect x="680" y="262" width="96" height="44" fill="#1e8449" opacity="0.85"/>
+    <text x="728" y="289" fill="#fff" text-anchor="middle">wbank 2</text>
+    <rect x="680" y="328" width="96" height="44" fill="#1e8449" opacity="0.85"/>
+    <text x="728" y="355" fill="#fff" text-anchor="middle">wbank 3</text>
+
+    <rect x="850" y="130" width="84" height="44" fill="#e8e8e8" stroke="#999"/>
+    <text x="892" y="157" text-anchor="middle">region 0</text>
+    <rect x="850" y="196" width="84" height="44" fill="#e8e8e8" stroke="#999"/>
+    <text x="892" y="223" text-anchor="middle">region 1</text>
+    <rect x="850" y="262" width="84" height="44" fill="#e8e8e8" stroke="#999"/>
+    <text x="892" y="289" text-anchor="middle">region 2</text>
+    <rect x="850" y="328" width="84" height="44" fill="#e8e8e8" stroke="#999"/>
+    <text x="892" y="355" text-anchor="middle">region 3</text>
+
+    <rect x="850" y="400" width="190" height="44" fill="#1e8449" opacity="0.85"/>
+    <text x="945" y="420" fill="#fff" text-anchor="middle" font-size="11">256b 4:1 mux</text>
+    <text x="945" y="436" fill="#fff" text-anchor="middle" font-size="11">+ serialiser</text>
+  </g>
+
+  <g stroke="#1e8449" stroke-width="2" marker-end="url(#arG)">
+    <line x1="776" y1="152" x2="848" y2="152"/>
+    <line x1="776" y1="218" x2="848" y2="218"/>
+    <line x1="776" y1="284" x2="848" y2="284"/>
+    <line x1="776" y1="350" x2="848" y2="350"/>
+  </g>
+  <!-- local gather into the mux -->
+  <g stroke="#1e8449" stroke-width="2.5" fill="none">
+    <path d="M728,374 L728,398 L848,398"/>
+    <path d="M728,310 L728,398"/>
+    <path d="M728,244 L728,398"/>
+    <path d="M728,178 L728,398"/>
+  </g>
+  <text x="790" y="392" font-size="10" fill="#1e8449">stays local</text>
+
+  <!-- narrow output -->
+  <line x1="945" y1="444" x2="945" y2="470" stroke="#1e8449" stroke-width="5" marker-end="url(#arG)"/>
+  <text x="960" y="462" font-size="13" fill="#1e8449" font-weight="bold">8 bits</text>
+
+  <g font-size="12">
+    <rect x="850" y="473" width="190" height="26" fill="#fff" stroke="#1e8449"/>
+    <text x="945" y="491" text-anchor="middle">expert_engine</text>
+    <line x1="945" y1="499" x2="945" y2="513" stroke="#1e8449" stroke-width="5" marker-end="url(#arG)"/>
+    <rect x="850" y="516" width="190" height="26" fill="#fff" stroke="#1e8449"/>
+    <text x="945" y="534" text-anchor="middle">moe_proto_top</text>
+    <line x1="945" y1="542" x2="945" y2="556" stroke="#1e8449" stroke-width="5" marker-end="url(#arG)"/>
+    <rect x="850" y="559" width="190" height="26" fill="#fff" stroke="#1e8449"/>
+    <text x="945" y="577" text-anchor="middle">moe_proto_board</text>
+    <line x1="945" y1="585" x2="945" y2="599" stroke="#1e8449" stroke-width="5" marker-end="url(#arG)"/>
+  </g>
+
+  <rect x="850" y="602" width="190" height="46" rx="6" fill="#fff" stroke="#1e8449" stroke-width="2"/>
+  <text x="945" y="630" font-size="13" text-anchor="middle" font-weight="bold">moe_loader</text>
+
+  <text x="930" y="700" font-size="13" fill="#1e8449" text-anchor="middle">~1024 wide nets &#8594; 40 narrow signals</text>
+  <text x="930" y="726" font-size="13" fill="#1e8449" text-anchor="middle">every bank output goes back to one local load</text>
+  <text x="930" y="752" font-size="13" fill="#333" text-anchor="middle">the loader is free to sit near the AXI bridge</text>
+  <text x="930" y="778" font-size="13" fill="#333" text-anchor="middle">weight_readback.v itself unchanged</text>
+
+  <!-- =================== BOTTOM: why it was global =================== -->
+  <rect x="20" y="836" width="1200" height="66" rx="8" fill="#fffbe6" stroke="#c9a227"/>
+  <text x="620" y="860" font-size="13" fill="#7a5c00" text-anchor="middle">
+    A wide bus is not a local problem &#8212; it is a global placement constraint.</text>
+  <text x="620" y="884" font-size="13" fill="#7a5c00" text-anchor="middle">
+    The placer had to move the loader to the centroid of four far-apart banks, while it also had to stay near the AXI bridge and the UART. Everything else got harder to route.</text>
+</svg>

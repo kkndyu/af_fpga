@@ -58,3 +58,12 @@ desktop.ini
 .DS_Store
 *.swp
 *~
+
+# ---- diagnostics and golden-model outputs ---------------------------------
+# golden.ps1 writes this; it is regenerable in about three seconds.
+/sim/data/golden_ps.hex
+# tb_loader writes this; it is the 256-lane result of the loader test.
+/sim/data/loader_out.hex
+
+# ---- tool caches -----------------------------------------------------------
+/.cache/

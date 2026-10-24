@@ -85,6 +85,11 @@ set files [list \
     $ROOT/rtl/core/gemv_engine.v \
     $ROOT/rtl/core/expert_engine.v \
     $ROOT/rtl/core/result_readout.v \
+    $ROOT/rtl/ctrl/moe_loader.v \
+    $ROOT/rtl/ctrl/weight_readback.v \
+    $ROOT/rtl/periph/uart_rx.v \
+    $ROOT/rtl/periph/uart_tx.v \
+    $ROOT/rtl/bus/axil_loader_bridge.v \
     $ROOT/rtl/top/moe_proto_top.v \
     $ROOT/rtl/top/moe_proto_board.v \
 ]
@@ -92,6 +97,37 @@ add_files -norecurse -fileset sources_1 {*}$files
 set_property is_global_include true [get_files $ROOT/rtl/include/moe_params.vh]
 set_property file_type {Verilog Header} [get_files $ROOT/rtl/include/moe_params.vh]
 set_property include_dirs $ROOT/rtl/include [current_fileset]
+
+# -----------------------------------------------------------------------------
+# JTAG-to-AXI path - OFF by default, see the note below
+# -----------------------------------------------------------------------------
+# Set WITH_AXI 1 to compile the JTAG-AXI transport in.
+#
+# It is off because jtag_axi registers itself as a debug core:
+#
+#     get_debug_cores  ->  dbg_hub, u_jtag_axi
+#
+# which forces opt_design to synthesise a dbg_hub.  On this machine that step
+# stalls indefinitely in "Processing IP xilinx.com:ip:xsdbm:3.0 for cell
+# dbg_hub_CV" - 30+ minutes with only ~300 CPU-seconds used and no child process,
+# so it is waiting, not computing.  The UART transport does not need any of that.
+#
+# The IP is added as an .xci, NOT as its out-of-context DCP: synth_design only
+# reads RTL, so a DCP added as a source is never linked and elaboration fails with
+# "module jtag_axi_v1_2_9_jtag_axi not found".
+set WITH_AXI 1
+if {$WITH_AXI} {
+    set AXI_XCI [glob -nocomplain $ROOT/build/ip/jtag_axil/*/sources_1/ip/jtag_axi_0/jtag_axi_0.xci]
+    if {[llength $AXI_XCI] == 0} {
+        fail "no jtag_axi_0.xci; run scripts/gen_jtag_axi.tcl first"
+    }
+    puts "====   jtag_axi xci: [lindex $AXI_XCI 0]"
+    add_files -norecurse -fileset sources_1 [lindex $AXI_XCI 0]
+    set_property verilog_define {WITH_JTAG_AXI} [current_fileset]
+} else {
+    puts "====   JTAG-AXI not compiled in (WITH_AXI 0)"
+}
+
 set_property top moe_proto_board [current_fileset]
 add_files -norecurse -fileset constrs_1 $ROOT/constr/ax7203.xdc
 

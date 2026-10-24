@@ -1,5 +1,21 @@
 # Hardware verification record: FP4 codebook GEMV on AX7203B
 
+> **HISTORICAL - this record describes the PRE-V2 architecture.**
+>
+> At the time of writing, weights were baked into the bitstream with `$readmemh`
+> and `wbank_region` had no write port, so the board was a self-starting
+> "burn the model, read the LEDs" demonstrator.  Several capability statements in
+> this file are therefore **out of date**: it says the design is "not loadable at
+> runtime" and that changing a model requires re-synthesis, which is exactly what
+> V2 fixed.
+>
+> What is still current: the clock-rate history, the throughput derivation, the
+> per-region measurements, and the five bugs catalogued in section 4 - those are
+> real history and the reasoning behind attributes that are still in the RTL.
+>
+> For the current architecture and its verification, read `v2_design.md`,
+> `verification.md` and `jtag_axi_findings.md` instead.
+
 Status: **verified on silicon at 50 MHz, 100 MHz and 200 MHz.**
 
 The 256-lane FP4 codebook GEMV computes the golden result on a real

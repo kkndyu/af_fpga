@@ -40,6 +40,7 @@ set rtl_files [list \
     $ROOT/rtl/mem/wbank_region.v \
     $ROOT/rtl/mem/act_buffer.v \
     $ROOT/rtl/mem/vec_buffer.v \
+    $ROOT/rtl/ctrl/weight_readback.v \
     $ROOT/rtl/core/gemv_engine.v \
 ]
 

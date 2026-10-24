@@ -33,7 +33,7 @@ if "%MODE%"=="" goto usage
 
 set "INC=-i "%ROOT%\rtl\include""
 
-set "RTL=%ROOT%\rtl\core\fp4_select.v %ROOT%\rtl\core\fp4_product_gen.v %ROOT%\rtl\core\mac_lane.v %ROOT%\rtl\core\mac_region.v %ROOT%\rtl\mem\wbank_region.v %ROOT%\rtl\mem\act_buffer.v %ROOT%\rtl\mem\vec_buffer.v %ROOT%\rtl\core\gemv_engine.v %ROOT%\rtl\core\expert_engine.v %ROOT%\rtl\core\result_readout.v %ROOT%\rtl\top\moe_proto_top.v"
+set "RTL=%ROOT%\rtl\core\fp4_select.v %ROOT%\rtl\core\fp4_product_gen.v %ROOT%\rtl\core\mac_lane.v %ROOT%\rtl\core\mac_region.v %ROOT%\rtl\mem\wbank_region.v %ROOT%\rtl\mem\act_buffer.v %ROOT%\rtl\mem\vec_buffer.v %ROOT%\rtl\core\gemv_engine.v %ROOT%\rtl\core\expert_engine.v %ROOT%\rtl\core\result_readout.v %ROOT%\rtl\ctrl\moe_loader.v %ROOT%\rtl\ctrl\weight_readback.v %ROOT%\rtl\periph\uart_rx.v %ROOT%\rtl\periph\uart_tx.v %ROOT%\rtl\top\moe_proto_top.v"
 
 set "WORK=%ROOT%\build\logs\%MODE%"
 if not exist "%WORK%" mkdir "%WORK%"
@@ -42,7 +42,50 @@ if /I "%MODE%"=="readout" goto readout
 if /I "%MODE%"=="board"   goto board
 if /I "%MODE%"=="engine"  goto engine
 if /I "%MODE%"=="gl"      goto gl
+if /I "%MODE%"=="loader"  goto loader
+if /I "%MODE%"=="uart"    goto uart
+if /I "%MODE%"=="axil"    goto axil
 goto usage
+
+REM ===========================================================================
+REM ===========================================================================
+:uart
+REM UART pair loopback plus a real STATUS command through the loader.  Runs at
+REM 2 Mbaud via the parameterised divider: at 115200 one byte is 17360 clocks, so
+REM the test would spend minutes of simulation proving nothing extra.
+call "%XIL%\xvlog.bat" %INC% "%ROOT%\rtl\core\fp4_select.v" "%ROOT%\rtl\core\fp4_product_gen.v" "%ROOT%\rtl\core\mac_lane.v" "%ROOT%\rtl\core\mac_region.v" "%ROOT%\rtl\mem\wbank_region.v" "%ROOT%\rtl\mem\act_buffer.v" "%ROOT%\rtl\mem\vec_buffer.v" "%ROOT%\rtl\core\gemv_engine.v" "%ROOT%\rtl\core\expert_engine.v" "%ROOT%\rtl\core\result_readout.v" "%ROOT%\rtl\ctrl\moe_loader.v" "%ROOT%\rtl\ctrl\weight_readback.v" "%ROOT%\rtl\periph\uart_rx.v" "%ROOT%\rtl\periph\uart_tx.v" "%ROOT%\rtl\top\moe_proto_top.v" "%ROOT%\sim\tb\tb_uart.v"
+if errorlevel 1 goto fail
+call "%XIL%\xelab.bat" tb_uart -debug typical -timescale 1ns/1ps -s tb_uart
+if errorlevel 1 goto fail
+call "%XIL%\xsim.bat" tb_uart -R
+set "RC=%ERRORLEVEL%"
+goto sweep
+
+REM ===========================================================================
+:axil
+REM Drives the AXI4-Lite bridge directly.  jtag_axi turns JTAG accesses into
+REM exactly these transactions, so passing here leaves only the JTAG TAP itself
+REM untested - and Vivado owns that.
+call "%XIL%\xvlog.bat" %INC% "%ROOT%\rtl\core\fp4_select.v" "%ROOT%\rtl\core\fp4_product_gen.v" "%ROOT%\rtl\core\mac_lane.v" "%ROOT%\rtl\core\mac_region.v" "%ROOT%\rtl\mem\wbank_region.v" "%ROOT%\rtl\mem\act_buffer.v" "%ROOT%\rtl\mem\vec_buffer.v" "%ROOT%\rtl\core\gemv_engine.v" "%ROOT%\rtl\core\expert_engine.v" "%ROOT%\rtl\core\result_readout.v" "%ROOT%\rtl\ctrl\moe_loader.v" "%ROOT%\rtl\ctrl\weight_readback.v" "%ROOT%\rtl\bus\axil_loader_bridge.v" "%ROOT%\rtl\top\moe_proto_top.v" "%ROOT%\sim\tb\tb_axil.v"
+if errorlevel 1 goto fail
+call "%XIL%\xelab.bat" tb_axil -debug typical -timescale 1ns/1ps -s tb_axil
+if errorlevel 1 goto fail
+call "%XIL%\xsim.bat" tb_axil -R
+set "RC=%ERRORLEVEL%"
+goto sweep
+
+REM ===========================================================================
+:loader
+REM Drives the loader's AXI-Stream byte port directly - no UART bit banging - so
+REM the protocol, the CRC gate and the memory writes are exercised fast.  The
+REM physical UART is verified separately by the loopback test.
+call "%XIL%\xvlog.bat" %INC% "%ROOT%\rtl\core\fp4_select.v" "%ROOT%\rtl\core\fp4_product_gen.v" "%ROOT%\rtl\core\mac_lane.v" "%ROOT%\rtl\core\mac_region.v" "%ROOT%\rtl\mem\wbank_region.v" "%ROOT%\rtl\mem\act_buffer.v" "%ROOT%\rtl\mem\vec_buffer.v" "%ROOT%\rtl\core\gemv_engine.v" "%ROOT%\rtl\core\expert_engine.v" "%ROOT%\rtl\core\result_readout.v" "%ROOT%\rtl\ctrl\moe_loader.v" "%ROOT%\rtl\ctrl\weight_readback.v" "%ROOT%\rtl\top\moe_proto_top.v" "%ROOT%\sim\tb\tb_loader.v"
+if errorlevel 1 goto fail
+call "%XIL%\xelab.bat" tb_loader -debug typical -timescale 1ns/1ps -s tb_ldr
+if errorlevel 1 goto fail
+call "%XIL%\xsim.bat" tb_ldr -R
+set "RC=%ERRORLEVEL%"
+goto sweep
 
 REM ===========================================================================
 :readout
