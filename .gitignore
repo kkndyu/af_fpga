@@ -75,3 +75,5 @@ desktop.ini
 /board.txt
 /board.etl.*
 /rtl.zip
+# temporary commit-message files
+/msg*.txt

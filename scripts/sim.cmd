@@ -44,6 +44,7 @@ if /I "%MODE%"=="engine"  goto engine
 if /I "%MODE%"=="gl"      goto gl
 if /I "%MODE%"=="loader"  goto loader
 if /I "%MODE%"=="uart"    goto uart
+if /I "%MODE%"=="eth"     goto eth
 if /I "%MODE%"=="axil"    goto axil
 goto usage
 
@@ -62,6 +63,16 @@ set "RC=%ERRORLEVEL%"
 goto sweep
 
 REM ===========================================================================
+:eth
+  REM Ethernet loader/MAC shim.  The vendor MAC and the RGMII converter are not
+  REM simulated - the converter's clock is forced and the signals the shim
+  REM exchanges with the MAC are driven directly - so this runs in seconds and
+  REM covers the four transmit faults and the receive burst faults.
+  call "%XIL%\xvlog.bat" -i "%ROOT%\rtl\include" %ROOT%\rtl\eth\*.v %ROOT%\rtl\eth\mac\*.v "%ROOT%\sim\tb\tb_eth_shim.v" "%XIL%\..\data\verilog\src\glbl.v"
+  call "%XIL%\xelab.bat" tb_eth_shim glbl -debug typical -timescale 1ns/1ps -L unisims_ver -s tb_eth_shim
+  call "%XIL%\xsim.bat" tb_eth_shim -R
+  goto :eof
+
 :axil
 REM Drives the AXI4-Lite bridge directly.  jtag_axi turns JTAG accesses into
 REM exactly these transactions, so passing here leaves only the JTAG TAP itself
