@@ -77,3 +77,5 @@ desktop.ini
 /rtl.zip
 # temporary commit-message files
 /msg*.txt
+/commitmsg*.txt
+/*msg*.txt

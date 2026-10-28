@@ -64,17 +64,21 @@ goto sweep
 
 REM ===========================================================================
 :eth
-  REM Ethernet loader/MAC shim.  The vendor MAC and the RGMII converter are not
-  REM simulated - the converter's clock is forced and the signals the shim
-  REM exchanges with the MAC are driven directly - so this runs in seconds and
-  REM covers the four transmit faults and the receive burst faults.
-  call "%XIL%\xvlog.bat" -i "%ROOT%\rtl\include" %ROOT%\rtl\eth\*.v %ROOT%\rtl\eth\mac\*.v "%ROOT%\sim\tb\tb_eth_shim.v" "%XIL%\..\data\verilog\src\glbl.v"
+  REM Ethernet loader/MAC shim.  The file list below is an explicit copy of the
+  REM one in build_moe.tcl rather than a wildcard, so the simulation and the
+  REM build can never drift apart and compile the simulation against a source
+  REM the bitstream does not contain.
+  REM
+  REM The vendor MAC and the RGMII converter are not simulated: the converter's
+  REM clock is forced and the signals the shim exchanges with the MAC are driven
+  REM directly, so this runs in seconds.
+  call "%XIL%\xvlog.bat" -i "%ROOT%\rtl\include" "%ROOT%\rtl\eth\eth_top.v" "%ROOT%\rtl\eth\mac\mac_top.v" "%ROOT%\rtl\eth\mac\mac_rx_top.v" "%ROOT%\rtl\eth\mac\mac_rx.v" "%ROOT%\rtl\eth\mac\mac_tx_top.v" "%ROOT%\rtl\eth\mac\mac_tx.v" "%ROOT%\rtl\eth\mac\mac_tx_mode.v" "%ROOT%\rtl\eth\mac\ip_rx.v" "%ROOT%\rtl\eth\mac\ip_tx.v" "%ROOT%\rtl\eth\mac\ip_tx_mode.v" "%ROOT%\rtl\eth\mac\udp_rx.v" "%ROOT%\rtl\eth\mac\udp_tx.v" "%ROOT%\rtl\eth\mac\arp_rx.v" "%ROOT%\rtl\eth\mac\arp_tx.v" "%ROOT%\rtl\eth\mac\icmp_reply.v" "%ROOT%\rtl\eth\mac\arp_cache.v" "%ROOT%\rtl\eth\mac\crc.v" "%ROOT%\rtl\eth\mac\dpram.v" "%ROOT%\rtl\eth\mac\vendor_ip.v" "%ROOT%\rtl\eth\eth_async_fifo.v" "%ROOT%\rtl\eth\util_gmii_to_rgmii.v" "%ROOT%\rtl\eth\mdio_rw.v" "%ROOT%\rtl\eth\eth_phy_probe.v" "%ROOT%\rtl\eth\eth_sniffer.v" "%ROOT%\sim\tb\tb_eth_shim.v" "%XIL%\..\data\verilog\src\glbl.v"
   call "%XIL%\xelab.bat" tb_eth_shim glbl -debug typical -timescale 1ns/1ps -L unisims_ver -s tb_eth_shim
   call "%XIL%\xsim.bat" tb_eth_shim -R
   goto :eof
 
 :axil
-REM Drives the AXI4-Lite bridge directly.  jtag_axi turns JTAG accesses into
+  REM Drives the AXI4-Lite bridge directly.  jtag_axi turns JTAG accesses into
 REM exactly these transactions, so passing here leaves only the JTAG TAP itself
 REM untested - and Vivado owns that.
 call "%XIL%\xvlog.bat" %INC% "%ROOT%\rtl\core\fp4_select.v" "%ROOT%\rtl\core\fp4_product_gen.v" "%ROOT%\rtl\core\mac_lane.v" "%ROOT%\rtl\core\mac_region.v" "%ROOT%\rtl\mem\wbank_region.v" "%ROOT%\rtl\mem\act_buffer.v" "%ROOT%\rtl\mem\vec_buffer.v" "%ROOT%\rtl\core\gemv_engine.v" "%ROOT%\rtl\core\expert_engine.v" "%ROOT%\rtl\core\result_readout.v" "%ROOT%\rtl\ctrl\moe_loader.v" "%ROOT%\rtl\ctrl\weight_readback.v" "%ROOT%\rtl\bus\axil_loader_bridge.v" "%ROOT%\rtl\top\moe_proto_top.v" "%ROOT%\sim\tb\tb_axil.v"
