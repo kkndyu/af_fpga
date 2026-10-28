@@ -155,20 +155,23 @@ module tb_eth_shim;
     // Observations
     // ------------------------------------------------------------------
     integer rx_bytes = 0;
-    reg [7:0] rx_seen [0:63];
+    reg [7:0] rx_seen [0:511];
 
     always @(posedge clk200) begin
-        if (ld_tvalid && ld_tready && rx_bytes < 64) begin
+        if (ld_tvalid && ld_tready && rx_bytes < 512) begin
             rx_seen[rx_bytes] = ld_tdata;
             rx_bytes = rx_bytes + 1;
         end
     end
 
     integer tx_bytes = 0;
-    reg [7:0] tx_seen [0:63];
+    reg [7:0] tx_seen [0:511];
 
+    // Sampled after the edge: the DUT registers are clocked by this same signal,
+    // so sampling in the same delta races the update and loses the final byte.
     always @(posedge clk125_force) begin
-        if (u_dut.tx_ram_wr_en && tx_bytes < 64) begin
+        #0.1;
+        if (u_dut.tx_ram_wr_en && tx_bytes < 512) begin
             tx_seen[tx_bytes] = u_dut.tx_ram_wr_data;
             tx_bytes = tx_bytes + 1;
         end
@@ -249,16 +252,19 @@ module tb_eth_shim;
             end
 
             // B) push an 8 byte reply
+            // AXI-Stream driver: assert valid, wait for a clock edge with ready
+            // high, then drop valid for a full cycle so each byte is exactly one
+            // transfer.  Holding valid across iterations let the last byte be
+            // dropped, which showed up as a short payload rather than a handshake
+            // error.
             for (i = 0; i < 8; i = i + 1) begin
+                ld_rdata  = i[7:0] + 8'h10;
+                ld_rvalid = 1'b1;
                 @(posedge clk200);
-                ld_rdata  <= i[7:0] + 8'h10;
-                ld_rvalid <= 1'b1;
-                // hold until accepted
                 while (!ld_rready) @(posedge clk200);
+                ld_rvalid = 1'b0;
+                @(posedge clk200);
             end
-            @(posedge clk200);
-            ld_rvalid <= 1'b0;
-            ld_rdata  <= 8'd0;
 
             // C) the shim must raise udp_tx_req and hold it
             repeat (600) @(posedge clk125_force);
@@ -299,6 +305,58 @@ module tb_eth_shim;
     endtask
 
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Test 3: a reply longer than the old 256 byte buffer
+    // ------------------------------------------------------------------
+    // The transmit buffer used to be 256 bytes with an 8 bit pointer, and the
+    // last-byte test compared against tx_len[7:0].  A READOUT reply is 256 lanes
+    // x 4 bytes = 1024, so it both wrapped the pointer and drove that compare to
+    // zero, which it could never reach - the stream would not terminate.
+    task test_long_tx;
+        integer i;
+        begin
+            $display("");
+            $display("  ---- test 3: long reply ----");
+
+            tx_bytes = 0;
+
+            for (i = 0; i < 300; i = i + 1) begin
+                ld_rdata  = (i * 7) & 8'hFF;
+                ld_rvalid = 1'b1;
+                @(posedge clk200);
+                while (!ld_rready) @(posedge clk200);
+                ld_rvalid = 1'b0;
+                @(posedge clk200);
+            end
+
+            repeat (700) @(posedge clk125_force);
+            if (u_dut.udp_tx_req !== 1'b1) begin
+                $display("  FAIL: udp_tx_req never asserted for a 300 byte reply");
+                errors = errors + 1;
+            end
+
+            @(posedge clk125_force);
+            f_ram_req = 1'b1;
+            @(posedge clk125_force);
+            f_ram_req = 1'b0;
+
+            repeat (600) @(posedge clk125_force);
+            if (tx_bytes !== 300) begin
+                $display("  FAIL: streamed %0d bytes of a 300 byte reply", tx_bytes);
+                errors = errors + 1;
+            end else begin
+                $display("  PASS: streamed 300 bytes, no wrap");
+            end
+
+            @(posedge clk125_force);
+            f_tx_end = 1'b1;
+            @(posedge clk125_force);
+            f_tx_end = 1'b0;
+            repeat (50) @(posedge clk125_force);
+        end
+    endtask
+
+
     initial begin
         $display("");
         $display("========== tb_eth_shim ==========");
@@ -309,6 +367,7 @@ module tb_eth_shim;
 
         test_rx;
         test_tx;
+        test_long_tx;
 
         $display("");
         if (errors == 0)

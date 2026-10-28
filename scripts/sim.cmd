@@ -38,6 +38,7 @@ set "RTL=%ROOT%\rtl\core\fp4_select.v %ROOT%\rtl\core\fp4_product_gen.v %ROOT%\r
 set "WORK=%ROOT%\build\logs\%MODE%"
 if not exist "%WORK%" mkdir "%WORK%"
 
+if /I "%MODE%"=="all"    goto all
 if /I "%MODE%"=="readout" goto readout
 if /I "%MODE%"=="board"   goto board
 if /I "%MODE%"=="engine"  goto engine
@@ -182,6 +183,29 @@ if "%LEFT%"=="1" (
 exit /b %RC%
 
 REM ===========================================================================
+:all
+  REM Run every target and stop at the first failure.  This is the gate: a target
+  REM that is not in it drifts, and two of them (engine and board) had been broken
+  REM for long enough that nobody noticed until the Ethernet work asked for a
+  REM reference model that did not exist.
+  set "ALLRC=0"
+  for %%T in (eth axil loader uart readout engine board) do (
+    echo.
+    echo ===== %%T =====
+    call "%~f0" %%T
+    if errorlevel 1 (
+      echo ===== %%T FAILED =====
+      set "ALLRC=1"
+    )
+  )
+  echo.
+  if "%ALLRC%"=="0" (
+    echo SIM ALL: EVERY TARGET PASSED
+  ) else (
+    echo SIM ALL: AT LEAST ONE TARGET FAILED
+  )
+  exit /b %ALLRC%
+
 :fail
 set "RC=%ERRORLEVEL%"
 goto sweep

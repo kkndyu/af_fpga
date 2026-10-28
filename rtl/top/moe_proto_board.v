@@ -42,7 +42,11 @@
 // Nothing here is initialised at configuration time: the weight and activation
 // BRAMs come up empty and stay empty until a host loads them.
 // -----------------------------------------------------------------------------
-module moe_proto_board (
+module moe_proto_board #(
+    // A parameter rather than a localparam so a testbench that does not carry the
+    // Ethernet sources can instantiate the core-only configuration.
+    parameter WITH_ETH = 1
+) (
     input         sys_clk_p,
     input         sys_clk_n,
     input         rst_n,
@@ -67,8 +71,7 @@ module moe_proto_board (
 
     // Ethernet control.  WITH_ETH=0 parks the port so the arbitration below stays
     // a straight three-input mux rather than needing a second code path.
-    localparam WITH_ETH = 1;
-
+    
     // ------------------------------------------------------------------
     // Clock
     // ------------------------------------------------------------------
@@ -196,6 +199,20 @@ module moe_proto_board (
     wire       a_rx_valid;
     wire       a_rx_ready;
 
+    // Ethernet status wires.  Declared outside the WITH_JTAG_AXI block because
+    // the LED logic below uses them whether or not the AXI bridge is compiled in;
+    // leaving them inside the ifdef left them undeclared for the board testbench,
+    // which cannot elaborate the jtag_axi IP and so never defines it.
+    wire        eth_arp_found;
+    wire [15:0] eth_rx_frames;
+    wire [15:0] eth_udp_rx;
+    wire [15:0] eth_tx_frames;
+    wire [15:0] eth_rec_error;
+    wire [15:0] eth_tx_done;
+    wire        eth_probe_valid;
+    wire [4:0]  eth_probe_addr;
+    wire [15:0] eth_probe_id;
+
 `ifdef WITH_JTAG_AXI
     // AXI4-Lite from the jtag_axi master
     wire [31:0] s_awaddr, s_wdata, s_araddr, s_rdata;
@@ -228,15 +245,6 @@ module moe_proto_board (
         .m_axi_rready  (s_rready)
     );
 
-      wire       eth_arp_found;
-      wire [15:0] eth_rx_frames;
-      wire [15:0] eth_udp_rx;
-      wire [15:0] eth_tx_frames;
-      wire [15:0] eth_rec_error;
-      wire [15:0] eth_tx_done;
-      wire        eth_probe_valid;
-      wire [4:0]  eth_probe_addr;
-      wire [15:0] eth_probe_id;
 
       // STATUS bytes 0..3, most significant first:
       //   [31]    arp_found     (received an ARP reply addressed to us)
@@ -380,6 +388,7 @@ module moe_proto_board (
     wire       e_ld_tlast;
     wire [7:0] e_ld_rdata;
     wire       e_ld_rvalid;
+    wire       e_ld_rready;
     wire       e_ld_rlast;
     wire       eth_cfg_done;
     wire [2:0] eth_mdio_step;

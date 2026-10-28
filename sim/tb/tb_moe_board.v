@@ -30,7 +30,7 @@ module tb_moe_board;
     reg  rst_n;
     wire [3:0] led;
 
-    moe_proto_board dut (
+    moe_proto_board #(.WITH_ETH(0)) dut (
         .sys_clk_p (sys_clk_p),
         .sys_clk_n (sys_clk_n),
         .rst_n     (rst_n),
@@ -66,20 +66,19 @@ module tb_moe_board;
         // zero result, which is far more confusing than doing nothing.
         for (i = 0; i < 200000; i = i + 1) begin
             @(posedge sys_clk_p);
-            if (dut.start === 1'b1 || dut.busy === 1'b1 || dut.done === 1'b1) begin
+            if (dut.gemv_start === 1'b1 || dut.gemv_busy === 1'b1 || dut.gemv_done === 1'b1) begin
                 start_seen = start_seen + 1;
             end
         end
 
-        $display("BOARD TB: state = %0d (S_WAIT=0)  load_done=%b", dut.st, dut.load_done);
+        $display("BOARD TB: weights_ready=%b act_valid=%b err_code=%0d", dut.weights_ready, dut.act_valid, dut.err_code);
         $display("BOARD TB: busy=%b done=%b  start pulses seen = %0d",
-                 dut.busy, dut.done, start_seen);
+                 dut.gemv_busy, dut.gemv_done, start_seen);
 
-        if (dut.st !== 2'd0) begin
-            $display("BOARD TB: ERROR sequencer left S_WAIT although nothing was loaded");
+        if (dut.weights_ready !== 1'b0) begin
+            $display("BOARD TB: ERROR weights_ready is set although nothing was loaded");
             errors = errors + 1;
-        end
-        if (start_seen != 0) begin
+        end        if (start_seen != 0) begin
             $display("BOARD TB: ERROR the engine was launched with no data loaded");
             errors = errors + 1;
         end
@@ -96,16 +95,18 @@ module tb_moe_board;
         @(posedge sys_clk_p);
 
         $display("BOARD TB: led[3:0] = %b  (active low: 0 = LED lit)", led);
-        $display("BOARD TB: expected LED_WAIT = 1010 (LED1 + LED3 lit)");
+                $display("BOARD TB: expected 1111 - all off.  led[0]=~weights_ready,");
+        $display("BOARD TB: led[1]=~act_valid, led[2]=~busy, led[3]=receive activity,");
+        $display("BOARD TB: and with nothing loaded all four are off.");
 
-        if (led !== 4'b1010) begin
+        if (led !== 4'b1111) begin
             $display("BOARD TB: ERROR unexpected LED pattern %b for the not-loaded state", led);
             errors = errors + 1;
         end
 
         $display("BOARD TB: --- what to look for on the board after programming ---");
-        $display("BOARD TB:   LED1+LED3 blinking together = NOT LOADED (expected in V2 step 3)");
-        $display("BOARD TB:   LED1+LED2 blinking together = PASS");
+        $display("BOARD TB:   all LEDs off             = NOT LOADED (the expected state here)");
+        $display("BOARD TB:   LED1+LED2 off after loading = weights and activations present");
         $display("BOARD TB:   LED3+LED4 blinking together = FAIL");
         $display("BOARD TB:   nothing lit                  = blink off-phase / not configured");
 

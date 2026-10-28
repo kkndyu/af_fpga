@@ -474,6 +474,8 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
 
     assign udp_rec_ram_read_addr = rx_addr;
 
+    wire       ld_tvalid_w;
+
     wire [7:0] ld_tdata_w = udp_rec_ram_rdata;
     wire       ld_tlast_w;
     wire       ld_ready_w;
@@ -604,9 +606,15 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
                      TX_STREAM  = 3'd2,   // pushing bytes at udp_tx
                      TX_SENDING = 3'd3;   // waiting for udp_tx_end
 
-    reg [7:0]  tx_buf [0:255];
-    reg [7:0]  tx_wr_ptr;
-    reg [7:0]  tx_rd_ptr;
+    // A READOUT reply is 256 lanes x 4 bytes = 1024 bytes, so an 8 bit
+    // pointer and a 256 entry buffer both wrapped on it: the write pointer
+    // silently overwrote earlier bytes, and the "last byte" test below
+    // compared against tx_len[7:0], which is zero for any multiple of 256,
+    // so the stream never terminated.  Wide enough for the largest reply
+    // the loader can produce.
+    reg [7:0]  tx_buf [0:1023];
+    reg [9:0]  tx_wr_ptr;
+    reg [9:0]  tx_rd_ptr;
     reg [15:0] tx_len;
     reg [2:0]  tx_st;
     reg [15:0] tx_gap;
@@ -616,8 +624,8 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
 
     always @(posedge gmii_rx_clk or negedge rst_n) begin
         if (!rst_n) begin
-            tx_wr_ptr            <= 8'd0;
-            tx_rd_ptr            <= 8'd0;
+            tx_wr_ptr            <= 10'd0;
+            tx_rd_ptr            <= 10'd0;
             tx_len               <= 16'd0;
             tx_st                <= TX_COLLECT;
             tx_gap               <= 16'd0;
@@ -632,14 +640,14 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
             TX_COLLECT: begin
                 if (ld_rvalid_w && ld_rready_w) begin
                     tx_buf[tx_wr_ptr] <= ld_rdata_w;
-                    tx_wr_ptr         <= tx_wr_ptr + 8'd1;
+                    tx_wr_ptr         <= tx_wr_ptr + 10'd1;
                     tx_gap            <= 16'd0;
-                end else if (tx_wr_ptr != 8'd0) begin
+                end else if (tx_wr_ptr != 10'd0) begin
                     if (tx_gap == 16'd255) begin
                         // reply finished: latch its length and ask udp_tx to send
-                        tx_len               <= {8'd0, tx_wr_ptr};
-                        udp_send_data_length <= {8'd0, tx_wr_ptr};
-                        tx_rd_ptr            <= 8'd0;
+                        tx_len               <= {6'd0, tx_wr_ptr};
+                        udp_send_data_length <= {6'd0, tx_wr_ptr};
+                        tx_rd_ptr            <= 10'd0;
                         tx_gap               <= 16'd0;
                         tx_st                <= TX_REQUEST;
                     end else begin
@@ -651,7 +659,7 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
             TX_REQUEST: begin
                 udp_tx_req <= 1'b1;          // held until udp_tx acknowledges
                 if (udp_ram_data_req) begin
-                    tx_rd_ptr <= 8'd0;
+                    tx_rd_ptr <= 10'd0;
                     tx_st     <= TX_STREAM;
                 end
             end
@@ -660,18 +668,18 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
                 udp_tx_req   <= 1'b0;
                 tx_ram_wr_en <= 1'b1;
                 tx_ram_wr_data <= tx_buf[tx_rd_ptr];
-                if (tx_rd_ptr + 8'd1 == tx_len[7:0]) begin
+                if (tx_rd_ptr + 10'd1 == tx_len[9:0]) begin
                     tx_st <= TX_SENDING;
                 end else begin
-                    tx_rd_ptr <= tx_rd_ptr + 8'd1;
+                    tx_rd_ptr <= tx_rd_ptr + 10'd1;
                 end
             end
 
             TX_SENDING: begin
                 udp_tx_req <= 1'b0;
                 if (udp_tx_end) begin
-                    tx_wr_ptr <= 8'd0;
-                    tx_rd_ptr <= 8'd0;
+                    tx_wr_ptr <= 10'd0;
+                    tx_rd_ptr <= 10'd0;
                     tx_st     <= TX_COLLECT;
                 end
             end
