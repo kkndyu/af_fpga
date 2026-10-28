@@ -73,6 +73,34 @@ module axil_loader_bridge #(
     input            weights_ready,
     input            act_valid,
     input            busy,
+    // Ethernet diagnostics, one register each.  Four numbers per word, most
+    // significant byte first, so a single AXI read describes the whole chain.
+    input      [31:0] eth_dbg,
+    input      [31:0] eth_dbg2,
+    input      [31:0] eth_dbg3,
+
+    // Runtime RGMII receive delay tap, so the sampling point can be swept from
+    // JTAG instead of being compiled in.  Write 0x10 with [4:0] = tap.
+    input      [31:0] eth_dbg4,       // graded receive errors
+    input      [7:0]  ld_cap_rdata,
+    input      [15:0] ld_cap_count,
+    input      [15:0] ld_cap_len,
+    input      [15:0] ld_cap_pay,
+    input      [15:0] ram_wr_cnt,
+    input      [10:0] ram_wr_addr,
+    input      [7:0]  ram_wr_data,
+    output reg [5:0]  ld_cap_raddr,
+
+    input      [15:0] snf_rdata,
+    input      [10:0] snf_wr_ptr,
+    input      [15:0] snf_count,
+    output reg [10:0] snf_raddr,
+    input      [4:0]  idly_tap_out,   // CNTVALUEOUT readback
+
+    output reg [4:0]  idly_tap = 5'd31,   // 31 is the value measured on hardware;
+                                          // the vendor's 10 does not work on this board
+    output            idly_ld,
+
     input      [7:0] err_code
 );
 
@@ -83,6 +111,8 @@ module axil_loader_bridge #(
     // ==================================================================
     reg        aw_held, w_held;
     reg [31:0] awaddr_r, wdata_r;
+    reg [5:0]  idly_ld_cnt;
+    assign idly_ld = (idly_ld_cnt != 6'd0);
     reg [1:0]  bresp_r;
     reg        bvalid_r;
 
@@ -128,9 +158,9 @@ assign s_axis_tdata  = tx_word[tx_idx*8 +: 8];
     assign s_axi_rvalid  = rvalid_r;
     assign s_axi_rresp   = 2'b00;
 
-    wire [1:0] rsel     = araddr_r[3:2];
+    wire [3:0] rsel     = araddr_r[5:2];
     wire       ar_take  = ar_held && !rvalid_r;
-    wire       pop_now  = ar_take && (rsel == 2'd2) && (rx_cnt >= 4);
+    wire       pop_now  = ar_take && (rsel == 4'd2) && (rx_cnt >= 4);
 
     wire [7:0] rx_b0 = rx_fifo[rx_rp];
     wire [7:0] rx_b1 = rx_fifo[(rx_rp + 1'b1) & (RX_D-1)];
@@ -140,9 +170,32 @@ assign s_axis_tdata  = tx_word[tx_idx*8 +: 8];
     reg [31:0] rdata_sel;
     always @* begin
         case (rsel)
-            2'd1:    rdata_sel = {16'd0, err_code, 5'd0, busy, act_valid, weights_ready};
-            2'd2:    rdata_sel = pop_now ? {rx_b3, rx_b2, rx_b1, rx_b0} : 32'd0;
-            2'd3:    rdata_sel = {16'd0, rx_cnt};
+  4'd1:    rdata_sel = {16'd0, err_code, 5'd0, busy, act_valid, weights_ready};
+  4'd2:    rdata_sel = pop_now ? {rx_b3, rx_b2, rx_b1, rx_b0} : 32'd0;
+             4'd3:    rdata_sel = {16'd0, rx_cnt};
+            // 0x10 Ethernet: {arp_found, tx_frames[7:0], udp_rx[7:0], rx_frames[7:0]}
+             4'd4:    rdata_sel = eth_dbg;
+            // 0x14 Ethernet: {rec_error[7:0], tx_done[7:0], udp_tx_done[7:0], 8'd0}
+             4'd5:    rdata_sel = eth_dbg2;
+            // 0x18 PHY probe: {valid, addr[4:0], id[15:0]}
+             4'd6:    rdata_sel = eth_dbg3;
+            // 0x20 graded errors: {8'd0, mac_err[7:0], ip_csum_err[7:0], ip_addr_err[7:0]}
+            4'd8:    rdata_sel = eth_dbg4;
+            // 0x24 capture status: {5'd0, wr_ptr[10:0], count[15:0]}
+            4'd9:    rdata_sel = {5'd0, snf_wr_ptr, snf_count};
+            // 0x28 captured entry at the address written to 0x14
+            4'd10:   rdata_sel = {16'd0, snf_rdata};
+            // 0x2C: the tap the IDELAY primitive actually holds
+            4'd11:   rdata_sel = {27'd0, idly_tap_out};
+            // 0x30 write: select which captured loader byte 0x34 returns
+            // 0x34 read : that byte
+            // 0x38 read : {payload_len[15:0], bytes_forwarded[15:0]}
+            // 0x3C read : {16'd0, udp_rec_data_length[15:0]}
+            4'd7:    rdata_sel = {5'd0, ram_wr_addr, ram_wr_cnt};
+            4'd12:   rdata_sel = {24'd0, ld_cap_rdata};
+            4'd13:   rdata_sel = {24'd0, ram_wr_data};
+            4'd14:   rdata_sel = {ld_cap_pay, ld_cap_count};
+            4'd15:   rdata_sel = {16'd0, ld_cap_len};
             default: rdata_sel = 32'd0;
         endcase
     end
@@ -183,7 +236,22 @@ assign s_axis_tdata  = tx_word[tx_idx*8 +: 8];
                 w_held   <= 1'b0;
                 bvalid_r <= 1'b1;
                 bresp_r  <= 2'b00;
-                if (awaddr_r[3:2] == 2'd0) begin
+                if (awaddr_r[5:2] == 4'd4) begin
+                    // 0x10 write: set the RGMII receive delay tap.
+                    // idly_ld stays high for 32 cycles (~160 ns).  A one-cycle
+                    // pulse at 200 MHz is 5 ns, shorter than the 8 ns period of
+                    // the 125 MHz clock the IDELAYE2 is clocked by, so the load
+                    // could be missed entirely - which is exactly why the first
+                    // tap sweep showed no change at any value.
+                    idly_tap     <= wdata_r[4:0];
+                    idly_ld_cnt  <= 6'd32;
+                end else if (awaddr_r[5:2] == 4'd5) begin
+                    // 0x14 write: select which capture entry 0x28 returns
+                    snf_raddr <= wdata_r[10:0];
+                end else if (awaddr_r[5:2] == 4'd12) begin
+                    // 0x30 write: select which loader-feed byte 0x34 returns
+                    ld_cap_raddr <= wdata_r[5:0];
+                end else if (awaddr_r[3:2] == 2'd0) begin
                     tx_word <= wdata_r;
                     tx_idx  <= 2'd0;
                     tx_busy <= 1'b1;

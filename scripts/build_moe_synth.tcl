@@ -81,6 +81,9 @@ set files [list \
     $ROOT/rtl/core/mac_region.v \
     $ROOT/rtl/mem/wbank_region.v \
     $ROOT/rtl/mem/act_buffer.v \
+    $ROOT/rtl/eth/eth_rgmii_rx.v \
+    $ROOT/rtl/eth/eth_rgmii_tx.v \
+    $ROOT/rtl/eth/eth_mdio.v \
     $ROOT/rtl/mem/vec_buffer.v \
     $ROOT/rtl/core/gemv_engine.v \
     $ROOT/rtl/core/expert_engine.v \

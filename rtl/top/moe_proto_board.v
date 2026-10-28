@@ -48,8 +48,26 @@ module moe_proto_board (
     input         rst_n,
     input         uart_rx,
     output        uart_tx,
-    output [3:0]  led
+    output [3:0]  led,
+
+    // ---- Ethernet port 1 (RGMII, 100 Mb) ----
+    // Present unconditionally.  Leaving them out under `ifdef would change the
+    // port list between configurations, and a port list change means a different
+    // PINW/pin placement for everything else.
+    input  [3:0]  rgmii_rxd,
+    input         rgmii_rxctl,
+    input         rgmii_rxc,
+    output [3:0]  rgmii_txd,
+    output        rgmii_txctl,
+    output        rgmii_txc,
+    output        phy_mdc,
+    inout         phy_mdio,
+    output        phy_rst_n
 );
+
+    // Ethernet control.  WITH_ETH=0 parks the port so the arbitration below stays
+    // a straight three-input mux rather than needing a second code path.
+    localparam WITH_ETH = 1;
 
     // ------------------------------------------------------------------
     // Clock
@@ -210,6 +228,64 @@ module moe_proto_board (
         .m_axi_rready  (s_rready)
     );
 
+      wire       eth_arp_found;
+      wire [15:0] eth_rx_frames;
+      wire [15:0] eth_udp_rx;
+      wire [15:0] eth_tx_frames;
+      wire [15:0] eth_rec_error;
+      wire [15:0] eth_tx_done;
+      wire        eth_probe_valid;
+      wire [4:0]  eth_probe_addr;
+      wire [15:0] eth_probe_id;
+
+      // STATUS bytes 0..3, most significant first:
+      //   [31]    arp_found     (received an ARP reply addressed to us)
+      //   [23:16] tx_frames     (frames the MAC transmitted)
+      //   [15:8]  udp_rx        (datagrams that passed every check)
+      //   [7:0]   rx_frames     (carrier arrivals)
+      wire [31:0] eth_dbg = { eth_arp_found,
+                              eth_tx_frames[7:0],
+                              eth_udp_rx[7:0],
+                              eth_rx_frames[7:0] };
+
+      // 0x18 = {probe_valid, 3'd0, probe_addr[4:0], 7'd0, probe_id[15:0]}
+      wire        eth_arp_resolved;
+      wire [15:0] ram_wr_cnt;
+      wire [10:0] ram_wr_addr;
+      wire [7:0]  ram_wr_data;
+      wire [5:0]  ld_cap_raddr;
+      wire [7:0]  ld_cap_rdata;
+      wire [15:0] ld_cap_count;
+      wire [15:0] ld_cap_len;
+      wire [15:0] ld_cap_pay;
+      wire [15:0] eth_mac_err;
+      wire [15:0] eth_csum_err;
+      wire [15:0] eth_addr_err;
+      wire [10:0] snf_raddr;
+      wire [15:0] snf_rdata;
+      wire [10:0] snf_wr_ptr;
+      wire [15:0] snf_count;
+
+      wire [31:0] eth_dbg4 = { {7'd0, eth_arp_resolved},
+                               eth_mac_err[7:0],
+                               eth_csum_err[7:0],
+                               eth_addr_err[7:0] };
+
+      wire [4:0]  eth_idly_tap;
+      wire [4:0]  eth_idly_tap_out;
+      wire        eth_idly_ld;
+
+      wire [31:0] eth_dbg3 = { eth_probe_valid, 3'd0,
+                               eth_probe_addr,
+                               7'd0,
+                               eth_probe_id };
+
+      wire [31:0] eth_dbg2 = { eth_rec_error[7:0],
+                               eth_tx_done[7:0],
+                               8'd0,
+                               8'd0 };
+
+
     axil_loader_bridge u_axil_bridge (
         .clk (sys_clk), .rst_n (rst_n),
         .s_axi_awaddr(s_awaddr), .s_axi_awvalid(s_awvalid), .s_axi_awready(s_awready),
@@ -220,7 +296,17 @@ module moe_proto_board (
         .s_axis_tdata(a_tx_data), .s_axis_tvalid(a_tx_valid), .s_axis_tready(a_tx_ready),
         .m_axis_tdata(a_rx_data), .m_axis_tvalid(a_rx_valid), .m_axis_tready(a_rx_ready),
         .weights_ready(weights_ready), .act_valid(act_valid),
-        .busy(busy), .err_code(err_code)
+        .busy(busy), .err_code (err_code),
+        .eth_dbg(eth_dbg), .eth_dbg2(eth_dbg2), .eth_dbg3(eth_dbg3),
+        .idly_tap(eth_idly_tap), .idly_ld(eth_idly_ld),
+        .idly_tap_out(eth_idly_tap_out),
+        .eth_dbg4(eth_dbg4),
+        .snf_rdata(snf_rdata), .snf_wr_ptr(snf_wr_ptr),
+        .snf_count(snf_count), .snf_raddr(snf_raddr),
+        .ld_cap_rdata(ld_cap_rdata), .ld_cap_count(ld_cap_count),
+        .ld_cap_len(ld_cap_len), .ld_cap_pay(ld_cap_pay),
+        .ld_cap_raddr(ld_cap_raddr),
+        .ram_wr_cnt(ram_wr_cnt), .ram_wr_addr(ram_wr_addr), .ram_wr_data(ram_wr_data)
     );
 `else
     // No JTAG-AXI in this build: park the port so the mux below is unconditional.
@@ -239,30 +325,165 @@ module moe_proto_board (
     wire [7:0]  ld_data;
     wire        ld_ready;
 
-    assign ld_valid = a_tx_valid | u_rx_valid;
-    assign ld_data  = a_tx_valid ? a_tx_data : u_rx_data;
+    // Three sources now.  Priority is fixed and deliberate:
+    //   1. JTAG-AXI   a transaction is already committed when it arrives, so it
+    //                 cannot be held off without stalling the debug cable
+    //   2. Ethernet   the stack has a small buffer and drops rather than stalls,
+    //                 so it needs to win over anything that can be retried
+    //   3. UART       can be held indefinitely by its own handshake; it is the
+    //                 fallback transport
+    wire        e_tx_valid;
+    wire [7:0]  e_tx_data;
+    wire        e_tx_ready;
+    wire        e_rx_valid;
+    wire [7:0]  e_rx_data;
+    wire        e_rx_ready;
 
-    assign a_tx_ready = ld_ready && a_tx_valid;
-    assign u_rx_ready = ld_ready && !a_tx_valid;
+    assign ld_valid = a_tx_valid | e_tx_valid | u_rx_valid;
+    assign ld_data  = a_tx_valid ? a_tx_data :
+                      e_tx_valid ? e_tx_data : u_rx_data;
+
+    assign a_tx_ready = ld_ready &&  a_tx_valid;
+    assign e_tx_ready = ld_ready && !a_tx_valid &&  e_tx_valid;
+    assign u_rx_ready = ld_ready && !a_tx_valid && !e_tx_valid;
 
     // Replies go back to whoever spoke last, so a UART host and a JTAG host can
     // both interrogate the same board without stealing each other's data.
-    reg reply_to_axi;
+    // 0 = UART, 1 = JTAG-AXI, 2 = Ethernet.  Latched on every byte the loader
+    // accepts, so the reply follows the transport that sent the command.
+    reg [1:0] reply_src;
 
     always @(posedge sys_clk or negedge rst_n) begin
-        if (!rst_n) reply_to_axi <= 1'b0;
-        else if (ld_valid && ld_ready) reply_to_axi <= a_tx_valid;
+        if (!rst_n) reply_src <= 2'd0;
+        else if (ld_valid && ld_ready)
+            reply_src <= a_tx_valid ? 2'd1 : (e_tx_valid ? 2'd2 : 2'd0);
     end
 
     wire        ld_mvalid;
     wire [7:0]  ld_mdata;
     wire        ld_mready;
 
-    assign ld_mready = reply_to_axi ? a_rx_ready : u_tx_ready;
-    assign a_rx_valid = ld_mvalid &  reply_to_axi;
+    assign ld_mready  = (reply_src == 2'd1) ? a_rx_ready :
+                        (reply_src == 2'd2) ? e_rx_ready : u_tx_ready;
+    assign a_rx_valid = ld_mvalid & (reply_src == 2'd1);
     assign a_rx_data  = ld_mdata;
-    assign u_tx_valid = ld_mvalid & ~reply_to_axi;
+    assign e_rx_valid = ld_mvalid & (reply_src == 2'd2);
+    assign e_rx_data  = ld_mdata;
+    assign u_tx_valid = ld_mvalid & (reply_src == 2'd0);
     assign u_tx_data  = ld_mdata;
+
+    // ------------------------------------------------------------------
+    // Ethernet transport
+    // ------------------------------------------------------------------
+    wire [7:0] e_ld_tdata;
+    wire       e_ld_tvalid;
+    wire       e_ld_tlast;
+    wire [7:0] e_ld_rdata;
+    wire       e_ld_rvalid;
+    wire       e_ld_rlast;
+    wire       eth_cfg_done;
+    wire [2:0] eth_mdio_step;
+    wire [3:0] eth_event;
+
+    generate if (WITH_ETH) begin : g_eth
+        eth_top #(
+            .LOCAL_MAC  (48'h020000000001),
+            .LOCAL_IP   (32'hC0A80806),      // 192.168.8.6
+            .LOCAL_PORT (16'd1234)
+        ) u_eth (
+            .clk            (sys_clk),
+            .rst_n          (rst_n),
+            .rgmii_rxd      (rgmii_rxd),
+            .rgmii_rxctl    (rgmii_rxctl),
+            .rgmii_rxc      (rgmii_rxc),
+            .rgmii_txd      (rgmii_txd),
+            .rgmii_txctl    (rgmii_txctl),
+            .rgmii_txc      (rgmii_txc),
+            .phy_mdc        (phy_mdc),
+            .phy_mdio       (phy_mdio),
+            .phy_rst_n      (phy_rst_n),
+            .ld_tdata       (e_ld_tdata),
+            .ld_tvalid      (e_ld_tvalid),
+            .ld_tready      (e_tx_ready),
+            .ld_tlast       (e_ld_tlast),
+            .ld_rdata       (e_ld_rdata),
+            .ld_rvalid      (e_ld_rvalid),
+            .ld_rready      (e_rx_ready),
+            .ld_rlast       (e_ld_rlast),
+            .phy_cfg_done   (eth_cfg_done),
+            .mdio_step      (eth_mdio_step),
+            .dbg_arp_found  (eth_arp_found),
+              .dbg_rx_frames  (eth_rx_frames),
+              .dbg_udp_rx     (eth_udp_rx),
+              .dbg_tx_frames  (eth_tx_frames),
+              .dbg_rec_error  (eth_rec_error),
+              .dbg_tx_done    (eth_tx_done),
+              .probe_valid    (eth_probe_valid),
+              .probe_addr     (eth_probe_addr),
+              .probe_id       (eth_probe_id),
+              .idly_tap       (eth_idly_tap),
+              .idly_ld        (eth_idly_ld),
+              .idly_tap_out   (eth_idly_tap_out),
+              .arp_resolved   (eth_arp_resolved),
+              .dbg_mac_err    (eth_mac_err),
+              .dbg_ip_csum_err(eth_csum_err),
+              .dbg_ip_addr_err(eth_addr_err),
+              .snf_raddr      (snf_raddr),
+              .snf_rdata      (snf_rdata),
+              .snf_wr_ptr     (snf_wr_ptr),
+              .snf_count      (snf_count),
+              .ld_cap_raddr   (ld_cap_raddr),
+              .ld_cap_rdata   (ld_cap_rdata),
+              .ld_cap_count   (ld_cap_count),
+              .ld_cap_len     (ld_cap_len),
+              .ld_cap_pay     (ld_cap_pay),
+              .ram_wr_cnt     (ram_wr_cnt),
+              .ram_wr_addr    (ram_wr_addr),
+              .ram_wr_data    (ram_wr_data)
+        );
+    end else begin : g_no_eth
+        assign e_ld_tdata  = 8'd0;
+        assign e_ld_tvalid = 1'b0;
+        assign e_ld_tlast  = 1'b0;
+        assign e_ld_rlast  = 1'b0;
+        assign eth_cfg_done = 1'b0;
+        assign eth_arp_found = 1'b0;
+          assign eth_rx_frames = 16'd0;
+          assign eth_udp_rx    = 16'd0;
+          assign eth_tx_frames = 16'd0;
+          assign eth_rec_error = 16'd0;
+          assign eth_tx_done   = 16'd0;
+          assign eth_probe_valid = 1'b0;
+          assign eth_probe_addr  = 5'd0;
+          assign eth_probe_id    = 16'd0;
+          assign eth_mac_err     = 16'd0;
+          assign eth_arp_resolved = 1'b0;
+          assign eth_csum_err    = 16'd0;
+          assign eth_addr_err    = 16'd0;
+          assign snf_rdata       = 16'd0;
+          assign snf_wr_ptr      = 11'd0;
+          assign snf_count       = 16'd0;
+          assign ld_cap_rdata    = 8'd0;
+          assign ld_cap_count    = 16'd0;
+          assign ld_cap_len      = 16'd0;
+          assign ld_cap_pay      = 16'd0;
+          assign ram_wr_cnt      = 16'd0;
+          assign ram_wr_addr     = 11'd0;
+          assign ram_wr_data     = 8'd0;
+        assign rgmii_txd    = 4'd0;
+        assign rgmii_txctl  = 1'b0;
+        assign rgmii_txc    = 1'b0;
+        assign phy_mdc      = 1'b0;
+        assign phy_mdio     = 1'bZ;
+        assign phy_rst_n    = 1'b1;
+    end
+    endgenerate
+
+    assign e_tx_valid = e_ld_tvalid;
+    assign e_tx_data  = e_ld_tdata;
+    assign e_rx_valid = e_ld_rvalid;
+    assign e_rx_data  = e_ld_rdata;
+    assign e_ld_rready = e_rx_ready;
 
     // ------------------------------------------------------------------
     // Loader
@@ -316,7 +537,7 @@ module moe_proto_board (
         .rb_nrows(rb_nrows), .rb_byte_ready(rb_byte_ready),
         .rb_byte_out(rb_byte_out), .rb_byte_valid(rb_byte_valid), .rb_done(rb_done),
         .weights_ready(weights_ready), .act_valid(act_valid),
-        .busy(busy), .err_code(err_code)
+        .busy(busy), .eth_dbg (eth_dbg), .err_code (err_code)
     );
 
     // ------------------------------------------------------------------
@@ -377,11 +598,40 @@ module moe_proto_board (
     end
 
     wire blink_phase = blink_cnt[BLINK_BIT];
+    // Two rates off the same counter: ~1.6 Hz and ~0.4 Hz at 200 MHz.
+    localparam integer BLINK_BIT_FAST = 22;
+    localparam integer BLINK_BIT_SLOW = 24;
+
+    // LED plan for the Ethernet bring-up.
+    //
+    // LED4 is a HEARTBEAT that never stops, so "all four LEDs dark" unambiguously
+    // means the design is not running.  The previous version made LED4 blink only
+    // when eth_cfg_done was high, and eth_cfg_done is a ONE-CYCLE pulse from the
+    // MDIO state machine - so LED4 could never light, and a board that was running
+    // perfectly looked identical to a dead one.
+    //
+    // The blink RATE now carries the status:
+    //   fast blink (bit BLINK_BIT_FAST) = MDIO sequence completed, PHY configured
+    //   slow blink (bit BLINK_BIT_SLOW) = still in reset/wait, not configured yet
+    //
+    // LED1..3 are unchanged: lit when weights_ready / act_valid / busy.
+    wire blink_fast = blink_cnt[BLINK_BIT_FAST];
+    wire blink_slow = blink_cnt[BLINK_BIT_SLOW];
+    wire mdio_ok    = (eth_mdio_step == 3'd5);
 
     assign led[0] = ~weights_ready;
     assign led[1] = ~act_valid;
     assign led[2] = ~busy;
-    assign led[3] = (err_code == 8'h00) ? blink_phase : 1'b0;
+    // LED4 reports the receive path, which is the question this design exists to
+// answer.  Three states, distinguishable by eye:
+//   fast blink  an ARP reply was generated  -> the whole chain works
+    //   slow blink  frames are arriving but no ARP reply -> wire is alive, frames rejected
+    //   dark        nothing has ever arrived    -> physical or PHY problem
+    assign led[3] = ~( eth_arp_found            ? blink_fast :
+                       (eth_rx_frames != 16'd0) ? blink_slow : 1'b0 );
+
+    wire unused_mdio_step = |eth_mdio_step;
+    wire unused_cfg_done  = eth_cfg_done;
 
     wire unused_checksum = ^result_checksum;
 

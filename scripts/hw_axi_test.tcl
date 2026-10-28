@@ -89,6 +89,14 @@ mark "using: $axi"
 set errors 0
 
 # -----------------------------------------------------------------------------
+mark "eth debug: 0x10 = {arp,tx,udp,rx}  0x14 = {recerr,txdone,0,0}"
+set e1 [axi_rd $axi 00000010]
+set e2 [axi_rd $axi 00000014]
+mark "  ETH_DBG  (0x10) = $e1"
+mark "  ETH_DBG2 (0x14) = $e2"
+set e3 [axi_rd $axi 00000018]
+mark "  PHY_PROBE (0x18) = $e3"
+
 mark "test 1: STATUS before anything (expect 0)"
 set raw [axi_rd $axi 00000004]
 set st  [hexval $raw]

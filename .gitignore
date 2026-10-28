@@ -67,3 +67,11 @@ desktop.ini
 
 # ---- tool caches -----------------------------------------------------------
 /.cache/
+
+# ---- capture and archive artefacts ----------------------------------------
+# These are throwaway outputs from pktmon and from packaging the tree; they are
+# large, machine-specific, and regenerate on demand.
+/board.etl
+/board.txt
+/board.etl.*
+/rtl.zip

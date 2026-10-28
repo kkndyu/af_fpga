@@ -81,6 +81,30 @@ set files [list \
     $ROOT/rtl/core/mac_region.v \
     $ROOT/rtl/mem/wbank_region.v \
     $ROOT/rtl/mem/act_buffer.v \
+    $ROOT/rtl/eth/eth_top.v \
+    $ROOT/rtl/eth/mac/mac_top.v \
+    $ROOT/rtl/eth/mac/mac_rx_top.v \
+    $ROOT/rtl/eth/mac/mac_rx.v \
+    $ROOT/rtl/eth/mac/mac_tx_top.v \
+    $ROOT/rtl/eth/mac/mac_tx.v \
+    $ROOT/rtl/eth/mac/mac_tx_mode.v \
+    $ROOT/rtl/eth/mac/ip_rx.v \
+    $ROOT/rtl/eth/mac/ip_tx.v \
+    $ROOT/rtl/eth/mac/ip_tx_mode.v \
+    $ROOT/rtl/eth/mac/udp_rx.v \
+    $ROOT/rtl/eth/mac/udp_tx.v \
+    $ROOT/rtl/eth/mac/arp_rx.v \
+    $ROOT/rtl/eth/mac/arp_tx.v \
+    $ROOT/rtl/eth/mac/icmp_reply.v \
+    $ROOT/rtl/eth/mac/arp_cache.v \
+    $ROOT/rtl/eth/mac/crc.v \
+    $ROOT/rtl/eth/mac/dpram.v \
+    $ROOT/rtl/eth/mac/vendor_ip.v \
+    $ROOT/rtl/eth/eth_async_fifo.v \
+    $ROOT/rtl/eth/util_gmii_to_rgmii.v \
+    $ROOT/rtl/eth/mdio_rw.v \
+    $ROOT/rtl/eth/eth_phy_probe.v \
+    $ROOT/rtl/eth/eth_sniffer.v \
     $ROOT/rtl/mem/vec_buffer.v \
     $ROOT/rtl/core/gemv_engine.v \
     $ROOT/rtl/core/expert_engine.v \
@@ -130,6 +154,7 @@ if {$WITH_AXI} {
 
 set_property top moe_proto_board [current_fileset]
 add_files -norecurse -fileset constrs_1 $ROOT/constr/ax7203.xdc
+    add_files -norecurse -fileset constrs_1 $ROOT/constr/ax7203_eth.xdc
 
 # The XDC pins 200 MHz; relax it here rather than editing the constraint file,
 # so the board constraint stays the single source of truth.
@@ -225,6 +250,22 @@ if {[catch {synth_design -top moe_proto_board -part $PART -flatten_hierarchy reb
 if {![check_clocks 5.000]} {
     fail "engine clock does not match the RTL divider; refusing to build a bitstream that would be timed against the wrong frequency"
 }
+
+# -----------------------------------------------------------------------------
+# No Ethernet multicycle exception in the gigabit build.
+# -----------------------------------------------------------------------------
+# The 100 Mb design needed one: it advanced at most once every eight fabric
+# clocks (one RGMII nibble per 40 ns), so a 42-way header case plus a 1024-entry
+# buffer read legitimately had eight cycles to settle.
+#
+# In the gigabit design the Ethernet stack runs in the PHY 125 MHz clock domain
+# and advances ONE BYTE PER CLOCK.  The exception would grant eight cycles to
+# paths that must complete in one, hiding real violations instead of expressing
+# a real property.  Removed deliberately; do not add it back without
+# re-deriving the pacing from the wire rate.
+
+# The 125 MHz domain comes from RX_CLK (8 ns), 60 % more than the 5 ns the same
+# combinational path was measured against.
 
 set ramb [get_cells -hier -quiet -filter {REF_NAME =~ RAMB*}]
 puts "==== post-synth RAMB cells = [llength $ramb]"

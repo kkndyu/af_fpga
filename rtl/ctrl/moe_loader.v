@@ -108,6 +108,13 @@ module moe_loader (
     output reg                  weights_ready,
     output reg                  act_valid,
     output                      busy,
+    // Ethernet diagnostics, read back through STATUS.  Four numbers separate
+    // the failure modes: frames arriving, datagrams that passed every check,
+    // ARP replies received, frames the MAC actually transmitted.  rx>0 with
+    // tx==0 means the received bytes never survived the MAC checks; tx>0 means
+    // the receive chain is fine and the problem is on the wire.
+    input      [31:0]           eth_dbg,
+
     output reg [7:0]            err_code
 );
 
@@ -609,7 +616,7 @@ module moe_loader (
                             st         <= P_MAGIC;
                         end
                     end else if (cmd == CMD_STATUS) begin
-                        stat_word <= {8'd0, 8'd0, 8'd0, 8'd0,
+                        stat_word <= {eth_dbg,
                                       {7'd0, (err_code != E_OK)},
                                       err_code,
                                       {7'd0, act_valid},
