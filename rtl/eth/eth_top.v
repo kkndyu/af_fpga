@@ -97,6 +97,11 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
     output     [15:0] ld_cap_count,     // total bytes forwarded
     output     [15:0] ld_cap_len,       // udp_rec_data_length at packet start
     output     [15:0] ld_cap_pay,
+    // Datagrams that arrived while the previous one was still being forwarded.
+    // udp_rx does not wait for the consumer, so such a datagram is lost and its
+    // RAM is overwritten mid-read - nothing here can prevent it, but silence is
+    // worse than a count.
+    output     [15:0] rx_drop_cnt,
     output     [15:0] ram_wr_cnt,      // payload writes seen by udp_rx
     output     [10:0] ram_wr_addr,     // last address written
     output     [7:0]  ram_wr_data,     // last byte written
@@ -501,6 +506,7 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
     reg        dv_q;          // udp_rec_data_valid, delayed one cycle
     reg [10:0] rx_len_q;      // payload length latched at burst start
     reg [11:0] rx_guard;      // hard limit on burst length
+    reg [15:0] rx_drop_cnt_r; // rising edges ignored because a burst was running
 
     wire dv_rise  = udp_rec_data_valid && !dv_q;
     wire [10:0] pay_lim = (rx_pay_len > 16'd2047) ? 11'd2047 : rx_pay_len[10:0];
@@ -513,14 +519,19 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
             rx_len_q <= 11'd0;
             rx_busy  <= 1'b0;
             rx_push  <= 1'b0;
-            rx_guard <= 12'd0;
-        end else begin
+            rx_guard      <= 12'd0;
+            rx_drop_cnt_r <= 16'd0;
+            end else begin
             dv_q <= udp_rec_data_valid;
 
             // Registered, so the push phase lands exactly one cycle behind
             // the address phase - which is what the RAM's one cycle read
             // latency needs, and it also covers the final byte.
             rx_push <= rx_busy;
+            // A datagram completing while the previous one is still in flight is
+            // lost for good, so at least record it.
+            if (dv_rise && rx_busy)
+                rx_drop_cnt_r <= rx_drop_cnt_r + 16'd1;
 
             if (dv_rise && !rx_busy && (pay_lim != 11'd0)) begin
                 rx_len_q <= pay_lim;      // latch: immune to later changes
@@ -612,6 +623,8 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
     // compared against tx_len[7:0], which is zero for any multiple of 256,
     // so the stream never terminated.  Wide enough for the largest reply
     // the loader can produce.
+    wire [8:0]  tx_q;        // {tlast, data} from the loader; declared here
+                             // because the collect state reads its tlast bit
     reg [7:0]  tx_buf [0:1023];
     reg [9:0]  tx_wr_ptr;
     reg [9:0]  tx_rd_ptr;
@@ -641,17 +654,16 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
                 if (ld_rvalid_w && ld_rready_w) begin
                     tx_buf[tx_wr_ptr] <= ld_rdata_w;
                     tx_wr_ptr         <= tx_wr_ptr + 10'd1;
-                    tx_gap            <= 16'd0;
-                end else if (tx_wr_ptr != 10'd0) begin
-                    if (tx_gap == 16'd255) begin
-                        // reply finished: latch its length and ask udp_tx to send
-                        tx_len               <= {6'd0, tx_wr_ptr};
-                        udp_send_data_length <= {6'd0, tx_wr_ptr};
+                    // The loader marks the final byte of every reply with tlast,
+                    // carried through the FIFO beside the byte, so the end is known
+                    // instead of guessed.  The idle-gap timer truncated a reply
+                    // that paused mid-stream.  1023 is a backstop: the buffer
+                    // cannot hold more.
+                    if (tx_q[8] || (tx_wr_ptr == 10'd1023)) begin
+                        tx_len               <= {6'd0, tx_wr_ptr + 10'd1};
+                        udp_send_data_length <= {6'd0, tx_wr_ptr + 10'd1};
                         tx_rd_ptr            <= 10'd0;
-                        tx_gap               <= 16'd0;
                         tx_st                <= TX_REQUEST;
-                    end else begin
-                        tx_gap <= tx_gap + 16'd1;
                     end
                 end
             end
@@ -691,7 +703,7 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
     // ==================================================================
     // Clock boundary to the 200 MHz loader
     // ==================================================================
-    wire [8:0] rx_q, tx_q;
+    wire [8:0] rx_q;
     wire       tx_fifo_full;
     wire       rx_empty, tx_empty;
 
@@ -709,6 +721,7 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
     );
 
     assign ld_tdata  = rx_q[7:0];
+    assign rx_drop_cnt = rx_drop_cnt_r;
     assign ld_tvalid = !rx_empty;
     assign ld_tlast  = rx_q[8];
 

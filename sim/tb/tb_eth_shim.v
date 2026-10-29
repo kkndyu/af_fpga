@@ -257,13 +257,18 @@ module tb_eth_shim;
             // transfer.  Holding valid across iterations let the last byte be
             // dropped, which showed up as a short payload rather than a handshake
             // error.
+            // Driven on the falling edge: changing these on the rising edge raced
+            // the FIFO's own sampling, so tlast was cleared before it was stored.
             for (i = 0; i < 8; i = i + 1) begin
+                @(negedge clk200);
                 ld_rdata  = i[7:0] + 8'h10;
+                ld_rlast  = (i == 7);
                 ld_rvalid = 1'b1;
                 @(posedge clk200);
-                while (!ld_rready) @(posedge clk200);
+                while (!ld_rready) @(negedge clk200);
+                @(negedge clk200);
                 ld_rvalid = 1'b0;
-                @(posedge clk200);
+                ld_rlast  = 1'b0;
             end
 
             // C) the shim must raise udp_tx_req and hold it
@@ -321,12 +326,15 @@ module tb_eth_shim;
             tx_bytes = 0;
 
             for (i = 0; i < 300; i = i + 1) begin
+                @(negedge clk200);
                 ld_rdata  = (i * 7) & 8'hFF;
+                ld_rlast  = (i == 299);
                 ld_rvalid = 1'b1;
                 @(posedge clk200);
-                while (!ld_rready) @(posedge clk200);
+                while (!ld_rready) @(negedge clk200);
+                @(negedge clk200);
                 ld_rvalid = 1'b0;
-                @(posedge clk200);
+                ld_rlast  = 1'b0;
             end
 
             repeat (700) @(posedge clk125_force);

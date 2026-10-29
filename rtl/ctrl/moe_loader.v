@@ -128,6 +128,11 @@ module moe_loader (
     // Reply: nrows x 32 bytes, most significant byte of each row first, so the
     // result lines up directly with the .mem file the host loaded from.
     localparam [7:0] CMD_READ_W  = 8'h06;
+    // WRITE_W no longer marks the weights ready by itself: a partial load used to
+    // look complete and RUN then computed on stale rows.  COMMIT is the only thing
+    // that sets weights_ready.
+    localparam [7:0] CMD_COMMIT  = 8'h07;
+    reg                     w_rows_seen;   // a WRITE_W completed since the last reset
 
     localparam [7:0] E_OK        = 8'h00;
     localparam [7:0] E_CRC       = 8'h01;
@@ -197,7 +202,7 @@ module moe_loader (
     localparam FIFO_AW = 5;
     localparam FIFO_D  = 1 << FIFO_AW;
 
-    reg [7:0]          fifo [0:FIFO_D-1];
+    reg [8:0]          fifo [0:FIFO_D-1];   // {last, data}
     reg [FIFO_AW-1:0]  fifo_wp, fifo_rp;
     reg [FIFO_AW:0]    fifo_cnt;
 
@@ -208,9 +213,9 @@ module moe_loader (
     // ------------------------------------------------------------------
     // Stream interfaces
     // ------------------------------------------------------------------
-    assign m_axis_tdata  = fifo[fifo_rp];
+    assign m_axis_tdata  = fifo[fifo_rp][7:0];
     assign m_axis_tvalid = !fifo_empty;
-    assign m_axis_tlast  = 1'b0;
+    assign m_axis_tlast  = fifo[fifo_rp][8];
 
     // The parser consumes at most one byte per cycle.  It only stops accepting
     // while a reply is being emitted, because a host that is mid-conversation
@@ -305,6 +310,20 @@ module moe_loader (
             else if (rb_push) rb_v_q <= 1'b0;
         end
     end
+    // A readback countdown: READ_W had no remaining-byte counter of its own.
+    reg [15:0] rb_left;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)                              rb_left <= 16'd0;
+        else if (rb_start)                       rb_left <= rb_nrows;
+        else if (rb_push && (rb_left != 16'd0))  rb_left <= rb_left - 16'd1;
+    end
+
+    // The final byte of each kind of reply.  Each producer counts its own
+    // remaining bytes, so "this push empties the counter" is the last one.
+    wire push_last = (status_push && (stat_left     == 4'd1))
+                  || (result_push && (rd_bytes_left == 16'd1))
+                  || (rb_push     && (rb_left       == 16'd1));
+
 
     wire fifo_push   = status_push || result_push || rb_push;
     wire [7:0] push_data = status_push ? stat_word[7:0] :
@@ -338,15 +357,15 @@ module moe_loader (
     // than the cycle it lands.  That is the correct pairing: push_data is captured
     // on the same edge into fifo_wdata_q.
     reg        fifo_wen_q;
-    reg [7:0]  fifo_wdata_q;
+    reg [8:0]  fifo_wdata_q;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             fifo_wen_q   <= 1'b0;
-            fifo_wdata_q <= 8'd0;
+            fifo_wdata_q <= 9'd0;
         end else begin
             fifo_wen_q   <= fifo_push;
-            fifo_wdata_q <= push_data;
+            fifo_wdata_q <= {push_last, push_data};
         end
     end
 
@@ -483,7 +502,7 @@ module moe_loader (
                         cmd <= din;
                         crc <= crc8(8'd0, din);
                         if (din == CMD_WRITE_W || din == CMD_WRITE_A ||
-                            din == CMD_RUN     || din == CMD_STATUS ||
+                            din == CMD_RUN     || din == CMD_STATUS || din == CMD_COMMIT ||
                             din == CMD_READOUT || din == CMD_READ_W) begin
                             st <= P_LEN_HI;
                         end else begin
@@ -588,7 +607,10 @@ module moe_loader (
                             st       <= P_EXEC;
                         end else begin
                             err_code <= E_CRC;
-                            if (cmd == CMD_WRITE_W) weights_ready <= 1'b0;
+                            if (cmd == CMD_WRITE_W) begin
+                                weights_ready <= 1'b0;
+                                w_rows_seen   <= 1'b0;   // a failed write restarts the load
+                            end
                             if (cmd == CMD_WRITE_A) act_valid     <= 1'b0;
                             st <= P_MAGIC;
                         end
@@ -597,9 +619,16 @@ module moe_loader (
 
                 P_EXEC: begin
                     if (cmd == CMD_WRITE_W) begin
-                        weights_ready <= 1'b1;
+                        w_rows_seen   <= 1'b1;    // only note it; COMMIT decides
                         err_code      <= E_OK;
                         st            <= P_MAGIC;
+                    end else if (cmd == CMD_COMMIT) begin
+                        if (!w_rows_seen) err_code <= E_NODATA;
+                        else begin
+                            weights_ready <= 1'b1;
+                            err_code      <= E_OK;
+                        end
+                        st <= P_MAGIC;
                     end else if (cmd == CMD_WRITE_A) begin
                         act_valid <= 1'b1;
                         err_code  <= E_OK;

@@ -258,6 +258,7 @@ module moe_proto_board #(
 
       // 0x18 = {probe_valid, 3'd0, probe_addr[4:0], 7'd0, probe_id[15:0]}
       wire        eth_arp_resolved;
+      wire [15:0] eth_rx_drop;
       wire [15:0] ram_wr_cnt;
       wire [10:0] ram_wr_addr;
       wire [7:0]  ram_wr_data;
@@ -314,7 +315,8 @@ module moe_proto_board #(
         .ld_cap_rdata(ld_cap_rdata), .ld_cap_count(ld_cap_count),
         .ld_cap_len(ld_cap_len), .ld_cap_pay(ld_cap_pay),
         .ld_cap_raddr(ld_cap_raddr),
-        .ram_wr_cnt(ram_wr_cnt), .ram_wr_addr(ram_wr_addr), .ram_wr_data(ram_wr_data)
+        .ram_wr_cnt(ram_wr_cnt), .ram_wr_addr(ram_wr_addr), .ram_wr_data(ram_wr_data),
+        .rx_drop_cnt(eth_rx_drop)
     );
 `else
     // No JTAG-AXI in this build: park the port so the mux below is unconditional.
@@ -390,6 +392,7 @@ module moe_proto_board #(
     wire       e_ld_rvalid;
     wire       e_ld_rready;
     wire       e_ld_rlast;
+    wire       ld_m_last;    // the loader's m_axis_tlast, which the transmit shim needs
     wire       eth_cfg_done;
     wire [2:0] eth_mdio_step;
     wire [3:0] eth_event;
@@ -418,7 +421,7 @@ module moe_proto_board #(
             .ld_rdata       (e_ld_rdata),
             .ld_rvalid      (e_ld_rvalid),
             .ld_rready      (e_rx_ready),
-            .ld_rlast       (e_ld_rlast),
+            .ld_rlast       (ld_m_last),
             .phy_cfg_done   (eth_cfg_done),
             .mdio_step      (eth_mdio_step),
             .dbg_arp_found  (eth_arp_found),
@@ -447,6 +450,7 @@ module moe_proto_board #(
               .ld_cap_len     (ld_cap_len),
               .ld_cap_pay     (ld_cap_pay),
               .ram_wr_cnt     (ram_wr_cnt),
+              .rx_drop_cnt    (eth_rx_drop),
               .ram_wr_addr    (ram_wr_addr),
               .ram_wr_data    (ram_wr_data)
         );
@@ -455,6 +459,7 @@ module moe_proto_board #(
         assign e_ld_tvalid = 1'b0;
         assign e_ld_tlast  = 1'b0;
         assign e_ld_rlast  = 1'b0;
+        assign ld_m_last   = 1'b0;
         assign eth_cfg_done = 1'b0;
         assign eth_arp_found = 1'b0;
           assign eth_rx_frames = 16'd0;
@@ -477,6 +482,7 @@ module moe_proto_board #(
           assign ld_cap_len      = 16'd0;
           assign ld_cap_pay      = 16'd0;
           assign ram_wr_cnt      = 16'd0;
+          assign eth_rx_drop     = 16'd0;
           assign ram_wr_addr     = 11'd0;
           assign ram_wr_data     = 8'd0;
         assign rgmii_txd    = 4'd0;
@@ -534,7 +540,7 @@ module moe_proto_board #(
         .s_axis_tdata (ld_data), .s_axis_tvalid (ld_valid),
         .s_axis_tready(ld_ready), .s_axis_tlast (1'b0),
         .m_axis_tdata (ld_mdata), .m_axis_tvalid(ld_mvalid),
-        .m_axis_tready(ld_mready), .m_axis_tlast(),
+        .m_axis_tready(ld_mready), .m_axis_tlast(ld_m_last),
         .w_wr_en(w_wr_en), .w_wr_region(w_wr_region),
         .w_wr_addr(w_wr_addr), .w_wr_data(w_wr_data),
         .a_wr_en(a_wr_en), .a_wr_addr(a_wr_addr), .a_wr_data(a_wr_data),

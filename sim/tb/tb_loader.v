@@ -335,6 +335,22 @@ module tb_loader;
             @(posedge clk);
         end
 
+        // A WRITE_W no longer marks the weights ready; the host ends a load with
+        // COMMIT and only that sets the flag.
+        begin : t_commit
+            reg [7:0] rdy, err;
+            frame_begin(8'h07, 16'd0);
+            frame_end;
+            @(posedge clk);
+            repeat (20) @(posedge clk);
+            get_status(rdy, err);
+            $display("LOADER TB: after COMMIT: weights_ready=%0d err=%02x", rdy, err);
+            if (rdy !== 8'd1) begin
+                $display("LOADER TB: ERROR weights_ready should be 1 after COMMIT");
+                errors = errors + 1;
+            end
+        end
+
         begin : t_weights_ok
             reg [7:0] rdy, err;
             get_status(rdy, err);
