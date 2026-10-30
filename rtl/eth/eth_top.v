@@ -660,8 +660,12 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
                     // that paused mid-stream.  1023 is a backstop: the buffer
                     // cannot hold more.
                     if (tx_q[8] || (tx_wr_ptr == 10'd1023)) begin
-                        tx_len               <= {6'd0, tx_wr_ptr + 10'd1};
-                        udp_send_data_length <= {6'd0, tx_wr_ptr + 10'd1};
+                        // tx_wr_ptr is ten bits, so tx_wr_ptr + 10'd1 wraps to zero
+                        // when the reply is exactly 1024 bytes - the buffer's full
+                        // capacity.  That sent a zero length datagram, udp_tx never
+                        // finished, and the loader wedged in P_REPLY for good.
+                        tx_len               <= {5'd0, {1'b0, tx_wr_ptr} + 11'd1};
+                        udp_send_data_length <= {5'd0, {1'b0, tx_wr_ptr} + 11'd1};
                         tx_rd_ptr            <= 10'd0;
                         tx_st                <= TX_REQUEST;
                     end
@@ -680,7 +684,7 @@ output     [2:0]  mdio_step,      // 0 while sweeping, 5 once the probe finished
                 udp_tx_req   <= 1'b0;
                 tx_ram_wr_en <= 1'b1;
                 tx_ram_wr_data <= tx_buf[tx_rd_ptr];
-                if (tx_rd_ptr + 10'd1 == tx_len[9:0]) begin
+                if ({1'b0, tx_rd_ptr} + 11'd1 == tx_len[10:0]) begin
                     tx_st <= TX_SENDING;
                 end else begin
                     tx_rd_ptr <= tx_rd_ptr + 10'd1;
