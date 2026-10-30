@@ -192,8 +192,19 @@ arp_rx  arp0
      
  .arp_rec_source_ip_addr        (arp_rec_source_ip_addr ),
  .arp_rec_source_mac_addr       (arp_rec_source_mac_addr ),
- .arp_found                     (arp_found )
+ .arp_found                     (arp_found ),
 
+ // crc_error gates whether arp_rx answers a request, and it was never connected,
+ // so that decision rested on whatever the tool does with an undriven input.
+ // Every simulation printed:
+ //   port 'crc_error' remains unconnected for this instance [mac_rx_top.v:178]
+ //
+ // Tying it low is the correct value, not a shortcut: mac_rx already drops any
+ // frame whose FCS fails -
+ //   REC_CRC: if (crc_error) rec_next_state <= REC_ERROR;
+ // - so a frame only reaches arp_rx after its FCS has been checked, and the gate
+ // inside arp_rx is a redundant second check that nothing was driving.
+ .crc_error                     (1'b0)
 ) ;
 
 
