@@ -74,9 +74,12 @@ REM ===========================================================================
   REM clock is forced and the signals the shim exchanges with the MAC are driven
   REM directly, so this runs in seconds.
   call "%XIL%\xvlog.bat" -i "%ROOT%\rtl\include" "%ROOT%\rtl\eth\eth_top.v" "%ROOT%\rtl\eth\mac\mac_top.v" "%ROOT%\rtl\eth\mac\mac_rx_top.v" "%ROOT%\rtl\eth\mac\mac_rx.v" "%ROOT%\rtl\eth\mac\mac_tx_top.v" "%ROOT%\rtl\eth\mac\mac_tx.v" "%ROOT%\rtl\eth\mac\mac_tx_mode.v" "%ROOT%\rtl\eth\mac\ip_rx.v" "%ROOT%\rtl\eth\mac\ip_tx.v" "%ROOT%\rtl\eth\mac\ip_tx_mode.v" "%ROOT%\rtl\eth\mac\udp_rx.v" "%ROOT%\rtl\eth\mac\udp_tx.v" "%ROOT%\rtl\eth\mac\arp_rx.v" "%ROOT%\rtl\eth\mac\arp_tx.v" "%ROOT%\rtl\eth\mac\icmp_reply.v" "%ROOT%\rtl\eth\mac\arp_cache.v" "%ROOT%\rtl\eth\mac\crc.v" "%ROOT%\rtl\eth\mac\dpram.v" "%ROOT%\rtl\eth\mac\vendor_ip.v" "%ROOT%\rtl\eth\eth_async_fifo.v" "%ROOT%\rtl\eth\util_gmii_to_rgmii.v" "%ROOT%\rtl\eth\mdio_rw.v" "%ROOT%\rtl\eth\eth_phy_probe.v" "%ROOT%\rtl\eth\eth_sniffer.v" "%ROOT%\sim\tb\tb_eth_shim.v" "%XIL%\..\data\verilog\src\glbl.v"
+  if errorlevel 1 goto fail
   call "%XIL%\xelab.bat" tb_eth_shim glbl -debug typical -timescale 1ns/1ps -L unisims_ver -s tb_eth_shim
+  if errorlevel 1 goto fail
   call "%XIL%\xsim.bat" tb_eth_shim -R
-  goto :eof
+  set "RC=%ERRORLEVEL%"
+  goto sweep
 
 :axil
   REM Drives the AXI4-Lite bridge directly.  jtag_axi turns JTAG accesses into

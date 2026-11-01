@@ -169,6 +169,7 @@ proc build_frame {cmd payload} {
 # Checking after each frame turns an intermittent cable glitch into a visible,
 # recoverable event, and pins the blame to one region.
 set errors 0
+mark "initial STATUS = [axi_rd $axi 00000004]"
 for {set r 0} {$r < 4} {incr r} {
     mark "building weight frame for region $r"
     set payload [list $r 0x00 0x00]
@@ -190,7 +191,8 @@ for {set r 0} {$r < 4} {incr r} {
         set st [hexval [axi_rd $axi 00000004]]
         set we [expr {$st & 1}]
         set er [expr {($st >> 8) & 0xFF}]
-        if {$we == 1 && $er == 0} {
+        # WRITE_W records received rows; only COMMIT sets weights_ready.
+        if {$er == 0} {
             mark "  region $r loaded (attempt $attempt)"
             set ok 1
         } else {
@@ -198,6 +200,16 @@ for {set r 0} {$r < 4} {incr r} {
         }
     }
     if {!$ok} { mark "  region $r could not be loaded"; incr errors }
+}
+
+mark "COMMIT weights"
+send_bytes $axi [build_frame 0x07 {}]
+after 50
+set st [hexval [axi_rd $axi 00000004]]
+mark "STATUS after COMMIT = [format %08X $st]"
+if {($st & 1) == 0 || (($st >> 8) & 0xFF) != 0} {
+    mark "ERROR: COMMIT failed"
+    incr errors
 }
 
 # =============================================================================
@@ -220,6 +232,7 @@ set st [hexval [axi_rd $axi 00000004]]
 mark "STATUS after load = [format %08X $st]   (bit0 weights_ready, bit1 act_valid)"
 if {($st & 3) != 3} {
     mark "ERROR: weights_ready/act_valid not both set"
+    incr errors
 }
 
 # =============================================================================
@@ -269,10 +282,44 @@ for {set i 0} {$i < [llength $got]} {incr i} {
 mark [format "checksum over returned lanes = %08X (expect FFFFC6E2)" $sum]
 mark "mismatched lanes: $bad of [llength $got]"
 
-if {$bad == 0 && [llength $got] == 256 && $errors == 0} {
+# Verify 32 consecutive rows from each bank over the AXI byte stream.
+# Unlike Ethernet, this transport does not use tlast to split replies.
+for {set bank 0} {$bank < 4} {incr bank} {
+    mark "READ_W bank $bank: first 32 rows"
+    send_bytes $axi [build_frame 0x06 [list $bank 0 0 31]]
+    set rb {}
+    set deadline [expr {[clock milliseconds] + 15000}]
+    while {[llength $rb] < 1024 && [clock milliseconds] < $deadline} {
+        set count [hexval [axi_rd $axi 0000000C]]
+        while {$count >= 4 && [llength $rb] < 1024} {
+            set word [hexval [axi_rd $axi 00000008]]
+            for {set b 0} {$b < 4} {incr b} {
+                lappend rb [expr {($word >> (8*$b)) & 0xFF}]
+            }
+            incr count -4
+        }
+    }
+    set expected {}
+    foreach row [lrange [lindex $W $bank] 0 31] {
+        for {set k 0} {$k < 64} {incr k 2} {
+            lappend expected [expr "0x[string range $row $k [expr {$k+1}]]"]
+        }
+    }
+    if {$rb ne $expected} {
+        mark "ERROR: bank $bank readback mismatch or short reply ([llength $rb] bytes)"
+        incr errors
+    } else {
+        mark "READ_W bank $bank: 1024/1024 bytes match"
+    }
+}
+set remaining [hexval [axi_rd $axi 0000000C]]
+if {$remaining != 0} { mark "ERROR: RXCOUNT after draining is $remaining"; incr errors }
+
+set passed [expr {$bad == 0 && [llength $got] == 256 && $errors == 0}]
+if {$passed} {
     mark "RESULT: FULL LOAD PASSED - all 256 lanes match ref_out.hex"
 } else {
-    if {$errors != 0} { mark "RESULT: FAILED - $errors weight region(s) never loaded" }
+    if {$errors != 0} { mark "RESULT: FAILED - $errors load/readback check(s) failed" }
     mark "RESULT: FAILED"
 }
 
@@ -280,4 +327,4 @@ catch {close_hw_target}
 catch {disconnect_hw_server}
 catch {close_hw}
 mark "done"
-exit 0
+exit [expr {$passed ? 0 : 1}]

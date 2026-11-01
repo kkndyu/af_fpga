@@ -28,6 +28,19 @@
 set ROOT   {D:/ai/moe_fpga_proto_verilog}
 set OUT    $ROOT/build/moe/out
 set PROJ   $ROOT/build/moe/proj
+set BANK3_LOCAL 0
+# Optional isolated run: -tclargs fixes_20261101 bank3
+# Restrict the name because OUT is recursively cleared below.
+if {[llength $argv] > 0} {
+    set run_name [lindex $argv 0]
+    if {![regexp {^[A-Za-z0-9_-]+$} $run_name]} { error "Invalid build run name" }
+    set OUT $ROOT/build/moe/$run_name
+    set PROJ $ROOT/build/moe/${run_name}_proj
+}
+if {[llength $argv] > 1} {
+    if {[lindex $argv 1] ne "bank3"} { error "Expected optional bank3 placement mode" }
+    set BANK3_LOCAL 1
+}
 set PART   xc7a200tfbg484-2
 set CLK_NS 10.000          ;# 100 MHz.  5.000 = 200 MHz once timing is clean.
 
@@ -289,10 +302,24 @@ puts "==== checkpoint: post_opt.dcp"
 flush stdout
 stage_done "opt_design"
 
+# Optional bank-3 experiment only; no additional lane-pair pblocks.
+if {$BANK3_LOCAL} {
+    set r3d [get_cells -hier -filter {NAME =~ *u_region3/wcode_d_reg*}]
+    if {[llength $r3d] != 256} { fail "Expected 256 region3 distribution registers" }
+    create_pblock pb_r3d
+    resize_pblock pb_r3d -add {SLICE_X0Y0:SLICE_X12Y30}
+    add_cells_to_pblock pb_r3d $r3d
+    puts "==== bank3 locality pblock: [llength $r3d] registers"
+}
+
 # -----------------------------------------------------------------------------
 stage "place_design"
 # -----------------------------------------------------------------------------
-if {[catch {place_design} e]} { fail "place_design: $e" }
+# A plain place_design here lands at WNS -0.024 ns, and it is deterministic:
+# rebuilding reproduces WNS -0.094 / TNS -0.111 at the same intermediate check
+# exactly.  The design sits a hair under 200 MHz, so ask the tools for their
+# higher effort modes rather than accepting a build that violates setup.
+if {[catch {place_design -directive Explore} e]} { fail "place_design: $e" }
 write_checkpoint -force $OUT/post_place.dcp
 puts "==== checkpoint: post_place.dcp"
 flush stdout
@@ -302,7 +329,7 @@ stage_done "place_design"
 # -----------------------------------------------------------------------------
 stage "route_design"
 # -----------------------------------------------------------------------------
-if {[catch {route_design} e]} { fail "route_design: $e" }
+if {[catch {route_design -directive Explore} e]} { fail "route_design: $e" }
 write_checkpoint -force $OUT/post_route.dcp
 puts "==== checkpoint: post_route.dcp"
 flush stdout
@@ -354,6 +381,14 @@ catch { set whs [get_property SLACK [get_timing_paths -max_paths 1 -hold]] }
 puts "==== WNS(setup) = $wns ns   WHS(hold) = $whs ns"
 flush stdout
 stage_done "reports"
+
+# A generated bitstream is not evidence of timing closure.
+if {![string is double -strict $wns] || ![string is double -strict $whs]} {
+    fail "Could not establish setup/hold slack; refusing bitstream generation"
+}
+if {$wns < 0.0 || $whs < 0.0} {
+    fail "Timing not closed: WNS=$wns ns WHS=$whs ns; checkpoints/reports retained"
+}
 
 # -----------------------------------------------------------------------------
 stage "write_bitstream"

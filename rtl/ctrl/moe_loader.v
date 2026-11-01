@@ -176,6 +176,9 @@ module moe_loader (
     reg [7:0]  cmd;
     reg [15:0] plen;
     reg [15:0] bcnt;
+    // Compute once per header, rather than incrementing bcnt before the
+    // payload-to-CRC state comparison on every incoming byte.
+    reg [15:0] payload_last;
     reg [7:0]  crc;
 
     reg [1:0]            tgt_region;
@@ -314,7 +317,7 @@ module moe_loader (
     reg [15:0] rb_left;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)                              rb_left <= 16'd0;
-        else if (rb_start)                       rb_left <= rb_nrows;
+        else if (rb_start)                       rb_left <= rb_nrows << 5;
         else if (rb_push && (rb_left != 16'd0))  rb_left <= rb_left - 16'd1;
     end
 
@@ -390,6 +393,7 @@ module moe_loader (
             cmd           <= 8'd0;
             plen          <= 16'd0;
             bcnt          <= 16'd0;
+            payload_last  <= 16'd0;
             crc           <= 8'd0;
             tgt_region    <= 2'd0;
             addr_hi       <= 8'd0;
@@ -523,6 +527,7 @@ module moe_loader (
                 P_LEN_LO: begin
                     if (take_byte) begin
                         plen[7:0] <= din;
+                        payload_last <= {plen[15:8], din} - 16'd1;
                         crc       <= crc8(crc, din);
                         bcnt      <= 16'd0;
                         w_bcnt    <= 6'd0;
@@ -579,7 +584,7 @@ module moe_loader (
                             endcase
                         end
 
-                        if (bcnt + 16'd1 == plen) st <= P_CRC;
+                        if (bcnt == payload_last) st <= P_CRC;
                     end
                 end
 

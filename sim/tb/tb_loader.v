@@ -30,6 +30,7 @@ module tb_loader;
 
     wire [7:0] m_axis_tdata;
     wire       m_axis_tvalid;
+    wire       m_axis_tlast;
     reg        m_axis_tready;
 
     wire                     w_wr_en;
@@ -111,7 +112,7 @@ module tb_loader;
         .m_axis_tdata   (m_axis_tdata),
         .m_axis_tvalid  (m_axis_tvalid),
         .m_axis_tready  (m_axis_tready),
-        .m_axis_tlast   (),
+        .m_axis_tlast   (m_axis_tlast),
         .w_wr_en        (w_wr_en),
         .w_wr_region    (w_wr_region),
         .w_wr_addr      (w_wr_addr),
@@ -140,6 +141,7 @@ module tb_loader;
         .rb_done        (rb_done),
         .weights_ready  (weights_ready),
         .busy           (busy),
+        .eth_dbg        (32'd0),
         .err_code       (err_code)
     );
 
@@ -171,14 +173,17 @@ module tb_loader;
     reg [7:0] tx_crc;
 
     reg [`ACT_W-1:0]  input_mem [0:`H_DIM-1];
+    reg [31:0] reference_mem [0:255];
     reg [`REGION_WCODE_W-1:0] w_mem0 [0:`H_DIM-1];
     reg [`REGION_WCODE_W-1:0] w_mem1 [0:`H_DIM-1];
     reg [`REGION_WCODE_W-1:0] w_mem2 [0:`H_DIM-1];
     reg [`REGION_WCODE_W-1:0] w_mem3 [0:`H_DIM-1];
 
     // Received bytes
-    reg [7:0] rx_bytes [0:2047];
+    reg [7:0] rx_bytes [0:8191];
     integer   rx_count;
+    integer   rx_last_count;
+    integer   rx_last_index;
 
     integer i, b, j, k;
     integer errors;
@@ -211,7 +216,11 @@ module tb_loader;
             if (rx_count < 8)
                 $display("LOADER TB:   [cap] cnt=%0d tdata=%02x rp=%0d",
                          rx_count, m_axis_tdata, u_loader.fifo_rp);
-            if (rx_count < 2048) rx_bytes[rx_count] = m_axis_tdata;
+            if (rx_count < 8192) rx_bytes[rx_count] = m_axis_tdata;
+            if (m_axis_tlast) begin
+                rx_last_count = rx_last_count + 1;
+                rx_last_index = rx_count;
+            end
             rx_count = rx_count + 1;
         end
     end
@@ -236,11 +245,59 @@ module tb_loader;
 
     task frame_begin(input [7:0] c, input [15:0] len);
         begin
+            rx_last_count = 0;
+            rx_last_index = -1;
             put(8'hA5);
             tx_crc = 8'd0;
             putc(c);
             putc(len[15:8]);
             putc(len[7:0]);
+        end
+    endtask
+
+    task check_last(input integer expected_bytes);
+        begin
+            if (rx_last_count != 1 || rx_last_index != expected_bytes - 1) begin
+                $display("LOADER TB: ERROR tlast count=%0d index=%0d expected final index=%0d",
+                         rx_last_count, rx_last_index, expected_bytes - 1);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    task check_weight_reply(input integer first_row, input integer nrows, input integer slow);
+        integer cycles, n, row, octet;
+        begin
+            rx_count = 0;
+            slow_mode = slow;
+            frame_begin(8'h06, 16'd4);
+            putc(8'd0);
+            putc(first_row >> 8);
+            putc(first_row & 255);
+            putc(nrows - 1);
+            frame_end;
+            cycles = 0;
+            while (rx_count < nrows*32 && cycles < nrows*32*300 + 1000) begin
+                @(negedge clk);
+                cycles = cycles + 1;
+            end
+            repeat (10) @(negedge clk);
+            if (rx_count != nrows*32) begin
+                $display("LOADER TB: ERROR READ_W rows=%0d length=%0d", nrows, rx_count);
+                errors = errors + 1;
+            end
+            check_last(nrows*32);
+            for (n = 0; n < nrows*32; n = n + 1) begin
+                row = first_row + n/32;
+                octet = n%32;
+                if (rx_bytes[n] !== w_mem0[row][255-octet*8 -: 8]) begin
+                    $display("LOADER TB: ERROR READ_W row=%0d byte=%0d", row, octet);
+                    errors = errors + 1;
+                end
+            end
+            slow_mode = 0;
+            $display("LOADER TB: READ_W %0d rows (%0d bytes), slow=%0d, tlast count=%0d index=%0d",
+                     nrows, rx_count, slow, rx_last_count, rx_last_index);
         end
     endtask
 
@@ -265,6 +322,7 @@ module tb_loader;
                      rx_bytes[4], rx_bytes[5], rx_bytes[6], rx_bytes[7]);
             ready = rx_bytes[0];
             err   = rx_bytes[2];
+            check_last(8);
         end
     endtask
 
@@ -274,12 +332,15 @@ module tb_loader;
         s_axis_tvalid  = 1'b0;
         m_axis_tready  = 1'b1;
         rx_count       = 0;
+        rx_last_count  = 0;
+        rx_last_index  = -1;
         errors         = 0;
         slow_mode      = 1'b0;      // must be initialised: as X, the "if (slow_mode)"
         slow_div       = 8'd0;      // comparison took the X branch and m_axis_tready
                                     // went X, so no reply byte ever transferred.
 
         $readmemh("sim/data/input.mem", input_mem);
+        $readmemh("sim/data/ref_out.hex", reference_mem);
         $readmemh("mem_init/expert0/gate_r0.mem", w_mem0);
         $readmemh("mem_init/expert0/gate_r1.mem", w_mem1);
         $readmemh("mem_init/expert0/gate_r2.mem", w_mem2);
@@ -478,6 +539,7 @@ module tb_loader;
         slow_mode = 1'b0;
 
         $display("LOADER TB: received %0d bytes (expect 1024)", rx_count);
+        check_last(1024);
         if (rx_count != 1024) begin
             $display("LOADER TB: ERROR wrong reply length");
             errors = errors + 1;
@@ -485,6 +547,10 @@ module tb_loader;
 
         fd = $fopen("sim/data/loader_out.hex", "w");
         for (i = 0; i < 256; i = i + 1) begin
+            if ({rx_bytes[i*4+3], rx_bytes[i*4+2], rx_bytes[i*4+1], rx_bytes[i*4]} !== reference_mem[i]) begin
+                $display("LOADER TB: ERROR result lane %0d differs from golden reference", i);
+                errors = errors + 1;
+            end
             $fwrite(fd, "%02x%02x%02x%02x\n",
                     rx_bytes[i*4+3], rx_bytes[i*4+2],
                     rx_bytes[i*4+1], rx_bytes[i*4+0]);
@@ -534,11 +600,18 @@ module tb_loader;
             end
         end
         if (errors == 0) $display("LOADER TB:   readback matches gate_r0.mem exactly");
+        check_last(128);
+        // One row catches a last marker asserted on byte 1; 32 rows reproduces
+        // the hardware failure; 256 rows exercises the maximum row-count byte.
+        check_weight_reply(5, 1, 0);
+        check_weight_reply(16, 32, 1);
+        check_weight_reply(128, 256, 0);
 
         if (errors == 0) begin
             $display("LOADER TB: PROTOCOL TESTS PASSED");
         end else begin
             $display("LOADER TB: %0d ERROR(S)", errors);
+            $fatal(1, "Loader regression failed");
         end
         $display("Output: sim/data/loader_out.hex");
         $finish;

@@ -165,14 +165,14 @@ module tb_eth_shim;
     end
 
     integer tx_bytes = 0;
-    reg [7:0] tx_seen [0:511];
+    reg [7:0] tx_seen [0:1023];
 
     // Sampled after the edge: the DUT registers are clocked by this same signal,
     // so sampling in the same delta races the update and loses the final byte.
     always @(posedge clk125_force) begin
         #0.1;
-        if (u_dut.tx_ram_wr_en && tx_bytes < 512) begin
-            tx_seen[tx_bytes] = u_dut.tx_ram_wr_data;
+        if (u_dut.tx_ram_wr_en) begin
+            if (tx_bytes < 1024) tx_seen[tx_bytes] = u_dut.tx_ram_wr_data;
             tx_bytes = tx_bytes + 1;
         end
     end
@@ -317,7 +317,7 @@ module tb_eth_shim;
     // last-byte test compared against tx_len[7:0].  A READOUT reply is 256 lanes
     // x 4 bytes = 1024, so it both wrapped the pointer and drove that compare to
     // zero, which it could never reach - the stream would not terminate.
-    task test_long_tx;
+    task test_long_tx(input integer nbytes);
         integer i;
         begin
             $display("");
@@ -325,21 +325,27 @@ module tb_eth_shim;
 
             tx_bytes = 0;
 
-            for (i = 0; i < 300; i = i + 1) begin
+            for (i = 0; i < nbytes; i = i + 1) begin
                 @(negedge clk200);
                 ld_rdata  = (i * 7) & 8'hFF;
-                ld_rlast  = (i == 299);
+                ld_rlast  = (i == nbytes - 1);
                 ld_rvalid = 1'b1;
                 @(posedge clk200);
                 while (!ld_rready) @(negedge clk200);
                 @(negedge clk200);
                 ld_rvalid = 1'b0;
                 ld_rlast  = 1'b0;
+                // A gap within a reply must not terminate a UDP packet.
+                if (i == 15) repeat (80) @(negedge clk200);
             end
 
             repeat (700) @(posedge clk125_force);
             if (u_dut.udp_tx_req !== 1'b1) begin
-                $display("  FAIL: udp_tx_req never asserted for a 300 byte reply");
+                $display("  FAIL: udp_tx_req never asserted for a %0d byte reply", nbytes);
+                errors = errors + 1;
+            end
+            if (u_dut.udp_send_data_length !== nbytes) begin
+                $display("  FAIL: incorrect UDP payload length for %0d bytes", nbytes);
                 errors = errors + 1;
             end
 
@@ -348,12 +354,18 @@ module tb_eth_shim;
             @(posedge clk125_force);
             f_ram_req = 1'b0;
 
-            repeat (600) @(posedge clk125_force);
-            if (tx_bytes !== 300) begin
-                $display("  FAIL: streamed %0d bytes of a 300 byte reply", tx_bytes);
+            repeat (1200) @(posedge clk125_force);
+            if (tx_bytes !== nbytes) begin
+                $display("  FAIL: streamed %0d bytes of a %0d byte reply", tx_bytes, nbytes);
                 errors = errors + 1;
             end else begin
-                $display("  PASS: streamed 300 bytes, no wrap");
+                for (i = 0; i < nbytes; i = i + 1) begin
+                    if (tx_seen[i] !== ((i * 7) & 8'hFF)) begin
+                        $display("  FAIL: reply byte %0d corrupted", i);
+                        errors = errors + 1;
+                    end
+                end
+                $display("  PASS: streamed %0d bytes, no wrap", nbytes);
             end
 
             @(posedge clk125_force);
@@ -375,13 +387,17 @@ module tb_eth_shim;
 
         test_rx;
         test_tx;
-        test_long_tx;
+        test_long_tx(32);
+        test_long_tx(300);
+        test_long_tx(1024);
 
         $display("");
         if (errors == 0)
             $display("ETH SHIM TB: ALL TESTS PASSED");
-        else
+        else begin
             $display("ETH SHIM TB: %0d FAILURE(S)", errors);
+            $fatal(1, "Ethernet shim regression failed");
+        end
         $display("=================================");
         $display("");
         $finish;
