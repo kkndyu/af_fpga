@@ -46,6 +46,10 @@ module gemv_engine #(
     input                         act_wr_en,
     input      [K_ADDR_W-1:0]     act_wr_addr,
     input      [`ACT_W-1:0]       act_wr_data,
+    input scale_wr_en,
+    input [1:0] scale_wr_region,
+    input [10:0] scale_wr_addr,
+    input [7:0] scale_wr_data,
 
     // Weight readback.
     //
@@ -74,6 +78,17 @@ module gemv_engine #(
     output     [`OUT_ACC_W-1:0]   acc_flat
 );
 
+`ifdef MOE_MXFP4
+    wire fp_busy, fp_done;
+    mxfp4_gemv_engine #(.K_LEN(K_LEN), .K_ADDR_W(K_ADDR_W)) u_mxfp4 (
+        .clk(clk), .rst_n(rst_n), .start(start), .busy(fp_busy), .done(fp_done),
+        .w_wr_en(w_wr_en), .w_wr_region(w_wr_region), .w_wr_addr(w_wr_addr), .w_wr_data(w_wr_data),
+        .act_wr_en(act_wr_en), .act_wr_addr(act_wr_addr), .act_wr_data(act_wr_data),
+        .scale_wr_en(scale_wr_en), .scale_wr_region(scale_wr_region), .scale_wr_addr(scale_wr_addr), .scale_wr_data(scale_wr_data),
+        .rb_start(rb_start), .rb_region(rb_region), .rb_addr(rb_addr), .rb_nrows(rb_nrows),
+        .rb_byte_ready(rb_byte_ready), .rb_byte_out(rb_byte_out), .rb_byte_valid(rb_byte_valid), .rb_done(rb_done), .acc_flat(acc_flat));
+    always @* begin busy = fp_busy; done = fp_done; end
+`else
     localparam S_IDLE   = 2'd0;
     localparam S_CLEAR  = 2'd1;
     localparam S_RUN    = 2'd2;
@@ -451,4 +466,5 @@ module gemv_engine #(
         end
     end
 
+`endif
 endmodule

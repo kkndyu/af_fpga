@@ -24,6 +24,13 @@
 foreach ch {stdout stderr} { catch { fconfigure $ch -buffering none } }
 
 set ROOT {D:/ai/moe_fpga_proto_verilog}
+set PROFILE integer
+set DATA_DIR $ROOT/build/mxfp4_vectors
+if {[llength $argv]} {
+    if {[lindex $argv 0] ne "mxfp4"} { error "Expected optional mxfp4 profile" }
+    set PROFILE mxfp4
+    if {[llength $argv] > 1} { set DATA_DIR [file normalize [lindex $argv 1]] }
+}
 set t_start [clock seconds]
 
 proc mark {msg} {
@@ -67,11 +74,23 @@ proc read_lines {path} {
 
 mark "reading data files"
 set W {}
+set S {}
 for {set b 0} {$b < 4} {incr b} {
-    lappend W [read_lines [format {%s/mem_init/expert0/gate_r%d.mem} $ROOT $b]]
+    if {$PROFILE eq "mxfp4"} {
+        lappend W [read_lines [format {%s/weight_r%d.mem} $DATA_DIR $b]]
+        lappend S [read_lines [format {%s/scale_r%d.mem} $DATA_DIR $b]]
+    } else {
+        lappend W [read_lines [format {%s/mem_init/expert0/gate_r%d.mem} $ROOT $b]]
+    }
 }
-set ACT   [read_lines $ROOT/sim/data/input.mem]
-set REF   [read_lines $ROOT/sim/data/ref_out.hex]
+if {$PROFILE eq "mxfp4"} {
+    set ACT [read_lines $DATA_DIR/activation.mem]
+    set REF [read_lines $DATA_DIR/ref_1024.hex]
+} else {
+    set ACT [read_lines $ROOT/sim/data/input.mem]
+    set REF [read_lines $ROOT/sim/data/ref_out.hex]
+}
+mark "arithmetic profile: $PROFILE"
 mark "  weights: [llength [lindex $W 0]] rows x 4 banks   act: [llength $ACT]   ref: [llength $REF]"
 
 # -----------------------------------------------------------------------------
@@ -202,6 +221,25 @@ for {set r 0} {$r < 4} {incr r} {
     if {!$ok} { mark "  region $r could not be loaded"; incr errors }
 }
 
+if {$PROFILE eq "mxfp4"} {
+    for {set bank 0} {$bank < 4} {incr bank} {
+        set scale_rows [lindex $S $bank]
+        if {[llength $scale_rows] != 32} { error "Expected 32 scale rows in bank $bank" }
+        for {set block 0} {$block < 32} {incr block} {
+            set row [lindex $scale_rows $block]
+            if {[string length $row] != 128} { error "Expected 64 E8M0 scales per row" }
+            set payload [list $bank 0 $block]
+            for {set lane 0} {$lane < 64} {incr lane} {
+                set pos [expr {(63-$lane)*2}]
+                lappend payload [expr "0x[string range $row $pos [expr {$pos+1}]]"]
+            }
+            send_bytes $axi [build_frame 0x08 $payload]
+            set st [hexval [axi_rd $axi 00000004]]
+            if {(($st >> 8) & 255) != 0} { error "WRITE_S failed: STATUS=$st" }
+        }
+        mark "bank $bank E8M0 scales loaded"
+    }
+}
 mark "COMMIT weights"
 send_bytes $axi [build_frame 0x07 {}]
 after 50
@@ -240,6 +278,13 @@ if {($st & 3) != 3} {
 # =============================================================================
 mark "RUN"
 send_bytes $axi [build_frame 0x03 {}]
+set deadline [expr {[clock milliseconds] + 2000}]
+set st [hexval [axi_rd $axi 00000004]]
+while {($st & 4) && [clock milliseconds] < $deadline} {
+    after 1
+    set st [hexval [axi_rd $axi 00000004]]
+}
+if {($st & 4) || (($st >> 8) & 255) != 0} { error "GEMV failed or timed out: STATUS=$st" }
 
 # =============================================================================
 # 4. READ_OUT 256 lanes
@@ -279,7 +324,9 @@ for {set i 0} {$i < [llength $got]} {incr i} {
         }
     }
 }
-mark [format "checksum over returned lanes = %08X (expect FFFFC6E2)" $sum]
+set expected_sum 0
+foreach value $REF { set expected_sum [expr {($expected_sum + [hexval $value]) & 0xFFFFFFFF}] }
+mark [format "checksum over returned lanes = %08X (expect %08X)" $sum $expected_sum]
 mark "mismatched lanes: $bad of [llength $got]"
 
 # Verify 32 consecutive rows from each bank over the AXI byte stream.

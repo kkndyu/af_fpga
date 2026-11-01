@@ -511,6 +511,10 @@ module moe_proto_board #(
     wire                       a_wr_en;
     wire [`H_ADDR_W-1:0]       a_wr_addr;
     wire [`ACT_W-1:0]          a_wr_data;
+    wire scale_wr_en;
+    wire [1:0] scale_wr_region;
+    wire [10:0] scale_wr_addr;
+    wire [7:0] scale_wr_data;
 
     wire        gemv_start, gemv_busy, gemv_done;
     wire        rd_start;
@@ -544,6 +548,8 @@ module moe_proto_board #(
         .w_wr_en(w_wr_en), .w_wr_region(w_wr_region),
         .w_wr_addr(w_wr_addr), .w_wr_data(w_wr_data),
         .a_wr_en(a_wr_en), .a_wr_addr(a_wr_addr), .a_wr_data(a_wr_data),
+        .scale_wr_en(scale_wr_en), .scale_wr_region(scale_wr_region),
+        .scale_wr_addr(scale_wr_addr), .scale_wr_data(scale_wr_data),
         .gemv_start(gemv_start), .gemv_busy(gemv_busy), .gemv_done(gemv_done),
         .rd_start(rd_start), .rd_start_lane(rd_start_lane), .rd_pause(rd_pause),
         .rd_valid(rd_valid), .rd_lane(rd_lane), .rd_byte(rd_byte),
@@ -571,6 +577,8 @@ module moe_proto_board #(
         .act_wr_en      (a_wr_en),
         .act_wr_addr    (a_wr_addr),
         .act_wr_data    (a_wr_data),
+        .scale_wr_en(scale_wr_en), .scale_wr_region(scale_wr_region),
+        .scale_wr_addr(scale_wr_addr), .scale_wr_data(scale_wr_data),
         .rd_start       (rd_start),
         .rd_start_lane  (rd_start_lane),
         .rd_pause       (rd_pause),

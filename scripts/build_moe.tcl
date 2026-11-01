@@ -29,6 +29,8 @@ set ROOT   {D:/ai/moe_fpga_proto_verilog}
 set OUT    $ROOT/build/moe/out
 set PROJ   $ROOT/build/moe/proj
 set BANK3_LOCAL 0
+set MXFP4_MODE 0
+set FP32_MODE 0
 # Optional isolated run: -tclargs fixes_20261101 bank3
 # Restrict the name because OUT is recursively cleared below.
 if {[llength $argv] > 0} {
@@ -37,10 +39,17 @@ if {[llength $argv] > 0} {
     set OUT $ROOT/build/moe/$run_name
     set PROJ $ROOT/build/moe/${run_name}_proj
 }
-if {[llength $argv] > 1} {
-    if {[lindex $argv 1] ne "bank3"} { error "Expected optional bank3 placement mode" }
-    set BANK3_LOCAL 1
+foreach mode [lrange $argv 1 end] {
+    switch -- $mode {
+        bank3 { set BANK3_LOCAL 1 }
+        mxfp4 { set MXFP4_MODE 1 }
+        # Binary32 accumulation instead of the 544-bit exact accumulator:
+        # one rounding per addition, 17 fewer cycles per row, far fewer flops.
+        fp32  { set MXFP4_MODE 1; set FP32_MODE 1 }
+        default { error "Expected optional bank3, mxfp4 or fp32 mode" }
+    }
 }
+if {$BANK3_LOCAL && $MXFP4_MODE} { error "The integer bank3 pblock does not apply to the MXFP4 hierarchy" }
 set PART   xc7a200tfbg484-2
 set CLK_NS 10.000          ;# 100 MHz.  5.000 = 200 MHz once timing is clean.
 
@@ -89,6 +98,13 @@ set_property source_mgmt_mode None [current_project]
 set files [list \
     $ROOT/rtl/include/moe_params.vh \
     $ROOT/rtl/core/fp4_select.v \
+    $ROOT/rtl/core/fp4_bf16_product_gen.v \
+    $ROOT/rtl/core/fp32_pack.v \
+    $ROOT/rtl/core/fp32_add.v \
+    $ROOT/rtl/core/mxfp4_lane.v \
+    $ROOT/rtl/core/mxfp4_lane_fp32.v \
+    $ROOT/rtl/core/mxfp4_region.v \
+    $ROOT/rtl/core/mxfp4_gemv_engine.v \
     $ROOT/rtl/core/fp4_product_gen.v \
     $ROOT/rtl/core/mac_lane.v \
     $ROOT/rtl/core/mac_region.v \
@@ -165,6 +181,14 @@ if {$WITH_AXI} {
     puts "====   JTAG-AXI not compiled in (WITH_AXI 0)"
 }
 
+if {$MXFP4_MODE} {
+    set definitions [get_property verilog_define [current_fileset]]
+    lappend definitions MOE_MXFP4
+    if {$FP32_MODE} { lappend definitions MOE_MXFP4_FP32 }
+    set_property verilog_define $definitions [current_fileset]
+    if {$FP32_MODE} { puts "====   accumulation: binary32 RNE per addition" }
+    puts "==== arithmetic profile: BF16 x MXFP4 weights, exact accumulation, FP32 RNE output"
+}
 set_property top moe_proto_board [current_fileset]
 add_files -norecurse -fileset constrs_1 $ROOT/constr/ax7203.xdc
     add_files -norecurse -fileset constrs_1 $ROOT/constr/ax7203_eth.xdc

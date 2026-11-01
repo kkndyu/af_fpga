@@ -77,6 +77,11 @@ module moe_loader (
     output reg                  a_wr_en,
     output reg [`H_ADDR_W-1:0]  a_wr_addr,
     output reg [`ACT_W-1:0]     a_wr_data,
+    // MXFP4 scale row: region, block address, then 64 E8M0 bytes.
+    output reg scale_wr_en,
+    output reg [1:0] scale_wr_region,
+    output reg [10:0] scale_wr_addr,
+    output reg [7:0] scale_wr_data,
 
     // engine
     output reg                  gemv_start,
@@ -132,6 +137,13 @@ module moe_loader (
     // look complete and RUN then computed on stale rows.  COMMIT is the only thing
     // that sets weights_ready.
     localparam [7:0] CMD_COMMIT  = 8'h07;
+    localparam [7:0] CMD_WRITE_S = 8'h08;
+`ifdef MOE_MXFP4
+    localparam FP4_ENABLED = 1;
+`else
+    localparam FP4_ENABLED = 0;
+`endif
+    reg [127:0] scale_rows_valid;
     reg                     w_rows_seen;   // a WRITE_W completed since the last reset
 
     localparam [7:0] E_OK        = 8'h00;
@@ -429,6 +441,9 @@ module moe_loader (
             a_wr_en       <= 1'b0;
             a_wr_addr     <= {`H_ADDR_W{1'b0}};
             a_wr_data     <= {`ACT_W{1'b0}};
+            scale_wr_en <= 0; scale_wr_region <= 0; scale_wr_addr <= 0; scale_wr_data <= 0;
+            scale_rows_valid <= 0;
+            w_rows_seen <= 0;
 
             gemv_start    <= 1'b0;
             rd_start      <= 1'b0;
@@ -446,6 +461,7 @@ module moe_loader (
             // one-cycle strobes
             w_wr_en    <= 1'b0;
             a_wr_en    <= 1'b0;
+            scale_wr_en <= 1'b0;
             gemv_start <= 1'b0;
 
             // ---------------- memory commits -------------------------
@@ -461,6 +477,14 @@ module moe_loader (
                 a_wr_addr <= base_addr;
                 a_wr_data <= a_val_full;
                 base_addr <= base_addr + 1'b1;
+            end
+
+            if (FP4_ENABLED && cmd == CMD_WRITE_S && st == P_PAYLOAD && take_byte &&
+                plen == 16'd67 && addr_hi == 0 && base_addr < 32 && bcnt >= 3 && bcnt < 67) begin
+                scale_wr_en <= 1;
+                scale_wr_region <= tgt_region;
+                scale_wr_addr <= {base_addr[4:0], w_idx[5:0]};
+                scale_wr_data <= din;
             end
 
             // ---------------- reply FIFO -----------------------------
@@ -507,8 +531,9 @@ module moe_loader (
                         crc <= crc8(8'd0, din);
                         if (din == CMD_WRITE_W || din == CMD_WRITE_A ||
                             din == CMD_RUN     || din == CMD_STATUS || din == CMD_COMMIT ||
-                            din == CMD_READOUT || din == CMD_READ_W) begin
+                            din == CMD_READOUT || din == CMD_READ_W || (FP4_ENABLED && din == CMD_WRITE_S)) begin
                             st <= P_LEN_HI;
+                            if (FP4_ENABLED && (din == CMD_WRITE_W || din == CMD_WRITE_S)) weights_ready <= 0;
                         end else begin
                             err_code <= E_BADCMD;
                             st       <= P_MAGIC;      // length would be meaningless
@@ -557,6 +582,17 @@ module moe_loader (
                                     // was plausible-but-wrong results.
                                     w_bcnt  <= w_row_done ? 6'd0 : (w_bcnt + 6'd1);
                                 end
+                            endcase
+                        end else if (cmd == CMD_WRITE_S && FP4_ENABLED) begin
+                            case (bcnt)
+                                16'd0: tgt_region <= din[1:0];
+                                16'd1: addr_hi <= din;
+                                16'd2: begin
+                                    base_addr <= {2'd0, din};
+                                    if (addr_hi == 0 && din < 32)
+                                        scale_rows_valid[{tgt_region, din[4:0]}] <= 0;
+                                end
+                                default: ;
                             endcase
                         end else if (cmd == CMD_WRITE_A) begin
                             case (bcnt)
@@ -617,6 +653,11 @@ module moe_loader (
                                 w_rows_seen   <= 1'b0;   // a failed write restarts the load
                             end
                             if (cmd == CMD_WRITE_A) act_valid     <= 1'b0;
+                            if (FP4_ENABLED && cmd == CMD_WRITE_S) begin
+                                weights_ready <= 0;
+                                if (addr_hi == 0 && base_addr < 32)
+                                    scale_rows_valid[{tgt_region, base_addr[4:0]}] <= 0;
+                            end
                             st <= P_MAGIC;
                         end
                     end
@@ -628,11 +669,20 @@ module moe_loader (
                         err_code      <= E_OK;
                         st            <= P_MAGIC;
                     end else if (cmd == CMD_COMMIT) begin
-                        if (!w_rows_seen) err_code <= E_NODATA;
+                        if (!w_rows_seen || (FP4_ENABLED && !(&scale_rows_valid))) err_code <= E_NODATA;
                         else begin
                             weights_ready <= 1'b1;
                             err_code      <= E_OK;
                         end
+                        st <= P_MAGIC;
+                    end else if (cmd == CMD_WRITE_S && FP4_ENABLED) begin
+                        if (plen != 67 || addr_hi != 0 || base_addr >= 32) begin
+                            err_code <= E_BADARG;
+                        end else begin
+                            scale_rows_valid[{tgt_region, base_addr[4:0]}] <= 1;
+                            err_code <= E_OK;
+                        end
+                        weights_ready <= 0;
                         st <= P_MAGIC;
                     end else if (cmd == CMD_WRITE_A) begin
                         act_valid <= 1'b1;

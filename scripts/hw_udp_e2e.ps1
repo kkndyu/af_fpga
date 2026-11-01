@@ -1,8 +1,23 @@
-param([string]$BoardIp = '192.168.8.6', [switch]$VerifyWeights)
+param(
+    [string]$BoardIp = '192.168.8.6', [switch]$VerifyWeights,
+    [ValidateSet('integer','mxfp4')][string]$Profile = 'integer',
+    [string]$DataDir
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot/udp_host.ps1"
 $BOARD_IP = $BoardIp
+if ($Profile -eq 'mxfp4') {
+    if (-not $DataDir) { $DataDir = "$root/build/mxfp4_vectors" }
+    $weightPrefix = "$DataDir/weight_r"
+    $activationPath = "$DataDir/activation.mem"
+    $referencePath = "$DataDir/ref_1024.hex"
+} else {
+    if ($DataDir) { throw 'DataDir is supported by the mxfp4 profile only' }
+    $weightPrefix = "$root/mem_init/expert0/gate_r"
+    $activationPath = "$root/sim/data/input.mem"
+    $referencePath = "$root/sim/data/ref_out.hex"
+}
 $timer = [Diagnostics.Stopwatch]::StartNew()
 function Mark([string]$Message) { Write-Output ('[{0:N2}s] {1}' -f $timer.Elapsed.TotalSeconds, $Message) }
 function Send-Only([byte]$Cmd, [byte[]]$Payload = @()) {
@@ -24,11 +39,12 @@ function Check-Status {
 }
 $udp = New-Udp
 try {
+    Mark "Arithmetic profile: $Profile"
     [byte[]]$initial = Check-Status
     Mark "Initial STATUS: $(Show-Bytes $initial)"
     $banks = @()
     for ($bank = 0; $bank -lt 4; $bank++) {
-        $rows = @(Get-Content "$root/mem_init/expert0/gate_r$bank.mem" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $rows = @(Get-Content "${weightPrefix}$bank.mem" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
         if ($rows.Count -ne 1024) { throw "Bank $bank row count is $($rows.Count)" }
         [byte[]]$data = New-Object byte[] 32768
         for ($row = 0; $row -lt 1024; $row++) {
@@ -45,6 +61,23 @@ try {
         }
         Mark "Bank $bank loaded: 32768 bytes"
     }
+    if ($Profile -eq 'mxfp4') {
+        for ($bank = 0; $bank -lt 4; $bank++) {
+            $scaleRows = @(Get-Content "$DataDir/scale_r$bank.mem" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($scaleRows.Count -ne 32) { throw "Bank $bank scale row count must be 32" }
+            for ($block = 0; $block -lt 32; $block++) {
+                if ($scaleRows[$block].Length -ne 128) { throw "Invalid scale row bank=$bank block=$block" }
+                [byte[]]$payload = New-Object byte[] 67
+                $payload[0] = $bank; $payload[1] = 0; $payload[2] = $block
+                for ($lane = 0; $lane -lt 64; $lane++) {
+                    $payload[3+$lane] = [Convert]::ToByte($scaleRows[$block].Substring((63-$lane)*2,2),16)
+                }
+                Send-Only 8 $payload
+                $null = Check-Status
+            }
+            Mark "Bank $bank E8M0 scales loaded: 2048 bytes"
+        }
+    }
     if ($VerifyWeights) { for ($bank = 0; $bank -lt 4; $bank++) {
         for ($row = 0; $row -lt 1024; $row += 32) {
             [byte[]]$reply = Read-Reply 6 ([byte[]]@($bank, ($row -shr 8), ($row -band 255), 31)) 1024
@@ -58,7 +91,7 @@ try {
     [byte[]]$status = Check-Status
     if ($status[0] -ne 1) { throw 'COMMIT did not set weights_ready' }
     Mark 'COMMIT passed'
-    $acts = @(Get-Content "$root/sim/data/input.mem" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $acts = @(Get-Content $activationPath | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($acts.Count -ne 1024) { throw 'Activation count is not 1024' }
     for ($row = 0; $row -lt 1024; $row += 256) {
         [byte[]]$payload = New-Object byte[] 514
@@ -73,7 +106,7 @@ try {
     [byte[]]$status = Check-Status
     if ($status[0] -ne 1 -or $status[1] -ne 1) { throw 'Weights or activations not ready' }
     Mark 'Activations loaded: 2048 bytes'
-    $reference = @(Get-Content "$root/sim/data/ref_out.hex" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $reference = @(Get-Content $referencePath | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($reference.Count -ne 256) { throw 'Reference count is not 256' }
     for ($run = 1; $run -le 3; $run++) {
         Send-Only 3

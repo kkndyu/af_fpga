@@ -44,6 +44,10 @@ module moe_proto_top (
     input                       act_wr_en,
     input      [`H_ADDR_W-1:0]  act_wr_addr,
     input      [`ACT_W-1:0]     act_wr_data,
+    input scale_wr_en,
+    input [1:0] scale_wr_region,
+    input [10:0] scale_wr_addr,
+    input [7:0] scale_wr_data,
 
     // Weight readback.  Drives the weight banks' read port while the engine is
     // idle; the caller is responsible for not starting one during a GEMV.
@@ -89,6 +93,8 @@ module moe_proto_top (
         .act_wr_en      (act_wr_en),
         .act_wr_addr    (act_wr_addr),
         .act_wr_data    (act_wr_data),
+        .scale_wr_en(scale_wr_en), .scale_wr_region(scale_wr_region),
+        .scale_wr_addr(scale_wr_addr), .scale_wr_data(scale_wr_data),
         .rb_start       (rb_start),
         .rb_region      (rb_region),
         .rb_addr        (rb_addr),

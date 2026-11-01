@@ -4,6 +4,13 @@
 Verilog-2001.  The multiply is replaced by a 16-way select over precomputed
 shift-and-add products, so the design uses **zero DSP48**.
 
+An opt-in **BF16 x MXFP4 weight** profile now adds standard E2M1 codes, an
+E8M0 scale per 32 weights per output channel, exact wide accumulation and
+FP32 output. It has its own build, fixtures and host-loading mode; the integer
+baseline measurements below do not describe its throughput or resource use.
+See [MXFP4 design and verification](docs/mxfp4_design.md) for the numerical
+contract, quantizer, scale protocol and commands.
+
 ## Status
 
 **V2: weights and activations are loaded at run time, not baked into the
